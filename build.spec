@@ -175,7 +175,6 @@ fi
 #echo "Dumping the acdc QA database..."
 #/usr/bin/mysqldump \
 #    --user=root \
-#    --password=xxxxx \
 #    --host=stopcqavt2.va.neustar.com \
 #    --add-drop-database \
 #    --add-drop-table \
@@ -185,7 +184,7 @@ fi
 
 # load the base database (only for initial install)
 #echo "Loading the ACDC database..."
-#mysql --user=root --password=Shut1tDown < %{install_target}/sql/acdc-base.sql
+#mysql --user=root < %{install_target}/sql/acdc-base.sql
 
 # clean up unnecessary files
 if [ -e %{install_target}/build.xml ]; then
@@ -239,7 +238,7 @@ if [ -n "$1" ]; then
         /etc/init.d/httpd restart
 
         # remove the database
-        mysql --user=root --password=Shut1tDown <<EOF
+        mysql --user=root <<EOF
         DROP DATABASE acdc;
 EOF
 
