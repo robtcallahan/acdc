@@ -1,0 +1,26 @@
+ServiceNow Test
+
+Summary
+------------------------------------------------------------
+Num DCI Hosts                 :  1737
+Num Found                     :  1258 (72.4%)
+Num No Location               :    15 ( 0.9%)
+Num Not Found                 :   424 (24.4%)
+Num Multiple                  :    40 ( 2.3%)
+Num Location Not Found        :     9 ( 0.5%)
+Num Rack Not Found            :   368 (21.2%)
+Num Updated                   :   639 ( 0.0%)
+
+ServiceNow Prod
+
+Summary
+------------------------------------------------------------
+Num DCI Hosts                 :  1737
+Num Found                     :  1337 (77.0%)
+Num No Location               :    15 ( 0.9%)
+Num Not Found                 :   348 (20.0%)
+Num Multiple                  :    37 ( 2.1%)
+Num Location Not Found        :     5 ( 0.3%)
+Num Rack Not Found            :   569 (32.8%)
+Num Updated                   :   702 (40.4%)
+

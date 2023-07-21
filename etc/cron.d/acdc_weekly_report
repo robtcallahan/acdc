@@ -1,0 +1,2 @@
+# Run the DCI Weekly Activity Report each Friday at 5:30PM
+30 1 * * 6 stsapps /var/www/html/acdc/bin/weekly_activity_report > /var/www/html/acdc/log/weekly_activity_report.log 2>&1

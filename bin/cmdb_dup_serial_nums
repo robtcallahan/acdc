@@ -1,0 +1,169 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: cmdb_dup_serial_nums 79676 2013-10-08 20:09:32Z rcallaha $
+ * $Date: 2013-10-08 16:09:32 -0400 (Tue, 08 Oct 2013) $
+ * $Author: rcallaha $
+ * $Revision: 79676 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/cmdb_dup_serial_nums $
+ *
+ *******************************************************************************
+ */
+
+include __DIR__ . "/../config/global.php";
+
+use STS\CMDB\CMDBCI;
+use STS\CMDB\CMDBCITable;
+use STS\CMDB\CMDBSysReportTable;
+
+try
+{
+    $config = $GLOBALS['config'];
+
+    print "Getting CMDB assets...\n";
+    $ciTable = new CMDBCITable();
+
+    $startTime  = time();
+    #$query = "sys_class_name=cmdb_ci_server^ORsys_class_name=cmdb_ci_netgear^ORsys_class_name=cmdb_ci_msd^ORsys_class_name=u_san_switches_storage^ORDERBYserial_number";
+
+    print "\tServers...";
+    $query1 = "sys_class_name=cmdb_ci_server^serial_numberISNOTEMPTY^ORDERBYserial_number";
+    $assets1 = $ciTable->getByQueryString($query1);
+    print count($assets1) . "\n";
+
+    print "\tNetwork Gear...";
+    $query2 = "sys_class_name=cmdb_ci_netgear^serial_numberISNOTEMPTY^ORDERBYserial_number";
+    $assets2 = $ciTable->getByQueryString($query2);
+    print count($assets2) . "\n";
+
+    print "\tStorage Arrays...";
+    $query3 = "sys_class_name=cmdb_ci_msd^serial_numberISNOTEMPTY^ORDERBYserial_number";
+    $assets3 = $ciTable->getByQueryString($query3);
+    print count($assets3) . "\n";
+
+    print "\tSAN Switches...";
+    $query4 = "sys_class_name=u_san_switches_storage^serial_numberISNOTEMPTY^ORDERBYserial_number";
+    $assets4 = $ciTable->getByQueryString($query4);
+    print count($assets4) . "\n";
+
+    $assets = array_merge($assets1, $assets2, $assets3, $assets4);
+    unset($assets1);
+    unset($assets2);
+    unset($assets3);
+    unset($assets4);
+
+    $elapsed = getElapsed($startTime);
+    print $elapsed . "\n";
+    print "\t" . count($assets) . " total assets found\n";
+
+    $snFile = fopen(__DIR__ . "/../data/cmdb_serial_numbers.txt", "w");
+
+    print "Processing...\n";
+    $snHash = array();
+    /** @var CMDBCI $a */
+    foreach ($assets as $a) {
+        #print $a->getSerialNumber() . " - ";
+        fwrite($snFile, $a->getSerialNumber() . "\n");
+
+        /*
+        if (preg_match("/[a-z]/", $a->getSerialNumber())) {
+            print "Updating serial number: " . $a->getSerialNumber() . " - ";
+            $a = updateSerialNumber($ciTable, $a);
+        }
+        */
+
+        if (!array_key_exists($a->getSerialNumber(), $snHash)) {
+            #print "NEW HASH KEY - ";
+            $snHash[$a->getSerialNumber()] = array();
+        }
+        #print count($snHash[$a->getSerialNumber()]) . " items - ";
+        $snHash[$a->getSerialNumber()][] = $a;
+        #print count($snHash[$a->getSerialNumber()]) . " items - ";
+        #if (count($snHash[$a->getSerialNumber()]) > 1) {
+        #    print count($snHash[$a->getSerialNumber()]) . " - " . $a->getSerialNumber() . "\n";
+        #}
+        #print "\n";
+        /*
+        if ($a->getSerialNumber() == "USE234CRDE") {
+            print "Target count: " . count($snHash[$a->getSerialNumber()]) . "\n";
+        }
+        */
+    }
+
+    print "Writing data files...\n";
+    $noSN = fopen(__DIR__ . "/../data/cmdb_no_sn.txt", "w");
+    $noSNSTCH = fopen(__DIR__ . "/../data/cmdb_no_sn_stch.txt", "w");
+    $dupSN = fopen(__DIR__ . "/../data/cmdb_dup_sn.txt", "w");
+
+    $assetsNoSN = array();
+    foreach ($snHash as $sn => $ar) {
+        if (count($ar) > 1) {
+            fwrite($dupSN, $sn . "\n");
+            foreach ($ar as $a) {
+                fwrite($dupSN, "\t" . $a->getName() . "\n");
+                $assetsNoSN[] = $a->getName();
+            }
+        }
+    }
+
+    $sysReportTable = new CMDBSysReportTable();
+    $sysReportTable->setUsernamePassword("rcallaha", "G3t1t0ff");
+    $reportName = 'CMDB Duplicate Serial Numbers';
+
+    print "Getting Report: " . $reportName . "\n";
+    $sysReport = $sysReportTable->getByTitle($reportName);
+    if ($sysReport->getSysId()) {
+        $hosts = implode(",", $assetsNoSN);
+        $filter = preg_replace("/nameIN.*?\^/", "nameIN" . $hosts . '^', $sysReport->getFilter());
+        $sysReport->setFilter($filter);
+        #print "filter={$filter}\n";
+
+        print "Updating SN report...\n";
+        $sysReport = $sysReportTable->update($sysReport);
+        if ($sysReport->getSysId()) {
+            print "Report updated\n";
+            #print $sysReport;
+        } else {
+            print "Error: report could not be updated\n";
+        }
+
+    } else {
+        print "Error: Could not get report\n";
+    }
+
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+
+function updateSerialNumber(CMDBCITable $ciTable, CMDBCI $a)
+{
+    $sn = $a->getSerialNumber();
+
+    $a->setSerialNumber("xxxACDCxxx");
+    $a = $ciTable->update($a);
+
+    $a->setSerialNumber(strtoupper($sn));
+    $a = $ciTable->update($a);
+    return $a;
+}
+
+function getElapsed($startTime)
+{
+    $endTime       = time();
+    $elapsedSecs   = $endTime - $startTime;
+    return sprintf("%02d:%02d", floor($elapsedSecs / 60), $elapsedSecs % 60);
+}
+?>

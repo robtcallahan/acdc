@@ -1,0 +1,82 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: update_acdc_cabinets 79676 2013-10-08 20:09:32Z rcallaha $
+ * $Date: 2013-10-08 16:09:32 -0400 (Tue, 08 Oct 2013) $
+ * $Author: rcallaha $
+ * $Revision: 79676 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/update_acdc_cabinets $
+ *
+ *******************************************************************************
+ */
+
+include __DIR__ . "/../config/global.php";
+
+use STS\CMDB\CMDBRackTable;
+
+try
+{
+    $config = $GLOBALS['config'];
+
+    $cabinetTable = new CabinetTable();
+    $locationTable = new LocationTable();
+    $cmdbRackTable = new CMDBRackTable();
+
+    $cabs = $cabinetTable->getAll();
+    foreach ($cabs as $cab) {
+        if ($cab->getSysId() || preg_match("/^(PDU|STS)/", $cab->getName())) continue;
+
+        if (strlen($cab->getName()) != 3) continue;
+
+        $location = $locationTable->getById($cab->getLocationId());
+
+        print $location->getName() . " - " . $cab->getName() . " - ";
+
+        $cmdbRack = new STS\CMDB\CMDBRack();
+        if ($location->getId()) {
+            try {
+                $cmdbRack = $cmdbRackTable->getByNameAndLocationId($cab->getName(), $location->getSysId());
+            } catch (ErrorException $e) {
+                if ($e->getCode() == STS\CMDB\CMDBDAO::MULTIPLE_ENTRIES) {
+                    print "multiple records\n";
+                    continue;
+                }
+                throw new ErrorException($e->getMessage());
+            }
+            if ($cmdbRack->getSysId()) {
+                $cab->setSysId($cmdbRack->getSysId());
+                $cab = $cabinetTable->update($cab);
+                print "ACDC cabinet updated\n";
+            } else {
+                print "CMDB rack not found: ";
+                $cmdbRack->setLocationId($location->getSysId())
+                    ->setName($cab->getName());
+                $cmdbRack = $cmdbRackTable->create($cmdbRack);
+                print "updated\n";
+            }
+        } else {
+            print "no location for cabinet\n";
+        }
+    }
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+function outlog($logMsg)
+{
+	print $logMsg;
+}
+
+?>

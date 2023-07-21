@@ -1,0 +1,59 @@
+#!/usr/bin/php
+<?php
+
+include __DIR__ . "/../config/global.php";
+
+try
+{
+    $config = $GLOBALS['config'];
+
+    $locationTable = new LocationTable();
+    $cabinetTable = new CabinetTable();
+    $placeholderTable = new PlaceholderTable();
+
+    $locations = $locationTable->getAll();
+    $cabinetTypeId = 19;
+
+    foreach ($locations as $location) {
+        print "\nLocation: " . $location->getName() . "\n";
+        $cabinets = $cabinetTable->getAllCabinetsByLocationId($location->getId());
+        $placeholders = $placeholderTable->getAllByLocationIdAndCabinetTypeId($location->getId(), $cabinetTypeId);
+
+        if (count($placeholders) >= count($cabinets)) continue;
+
+        $phHash = array();
+        foreach ($placeholders as $ph) {
+            $phHash[$ph->getX() . "-" . $ph->getY()] = $ph;
+        }
+        foreach ($cabinets as $c) {
+            if (!array_key_exists($c->getX() . "-" . $c->getY(), $phHash)) {
+                $newPH = new Placeholder();
+                $newPH->setX($c->getX())
+                      ->setY($c->getY())
+                      ->setLocationId($location->getId())
+                      ->setCabinetTypeId($cabinetTypeId)
+                      ->setText($c->getName())
+                      ->setScaleX(1.00)
+                      ->setScaleY(1.00)
+                      ->setRotation($c->getRotation());
+                print "\tAdding PH {$c->getName()} at ({$c->getX()},{$c->getY()})\n";
+                $newPH = $placeholderTable->create($newPH);
+            }
+        }
+    }
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+

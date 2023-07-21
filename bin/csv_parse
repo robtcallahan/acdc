@@ -1,0 +1,1031 @@
+#!/usr/bin/php
+<?php
+
+class Record
+{
+    protected $location;
+    protected $cage;
+    protected $cabinet;
+    protected $rackUnits;
+    protected $elevation;
+    protected $numRUs;
+    protected $powerStatus;
+    protected $fqdn;
+    protected $manufacturer;
+    protected $model;
+    protected $serialNum;
+    protected $assetTag;
+    protected $businessService;
+    protected $powerType;
+    protected $voltage;
+    protected $comments;
+
+    protected $changes = array();
+
+    private static $_properties = array(
+        "location",
+        "cage",
+        "cabinet",
+        "rackUnits",
+        "elevation",
+        "numRUs",
+        "powerStatus",
+        "fqdn",
+        "manufacturer",
+        "model",
+        "serialNum",
+        "assetTag",
+        "businessService",
+        "powerType",
+        "voltage",
+        "comments"
+    );
+
+    function __construct($fields) {
+        for ($i=0; $i<count(self::$_properties); $i++) {
+            $this->set(self::$_properties[$i], array_key_exists($i, $fields) ? $fields[$i] : '');
+        }
+    }
+
+    public static function getCSVHeads()
+    {
+        $buffer = array();
+        for ($i=0; $i<count(self::$_properties); $i++) {
+            $buffer[] = ucfirst(self::$_properties[$i]);
+        }
+        return implode(',', $buffer);
+    }
+
+    public function toCSV() {
+        $buffer = array();
+        for ($i=0; $i<count(self::$_properties); $i++) {
+            $buffer[] = '"' . $this->get(self::$_properties[$i]) . '"';
+        }
+        return implode(',', $buffer);
+    }
+
+    /**
+     * @return string
+     */
+    public function __toString()
+    {
+        $return = "";
+        for ($i=0; $i<count(self::$_properties); $i++) {
+            $return .= sprintf("%14s %-20s => %s\n", " ", self::$_properties[$i], $this->get(self::$_properties[$i]));
+        }
+        return $return;
+    }
+
+    /**
+     * @return object
+     */
+    public function toObject()
+    {
+        $obj = (object)array();
+        foreach (get_class_vars(__CLASS__) as $prop => $x) {
+            if (property_exists($this, $prop)) {
+                $obj->$prop = $this->$prop;
+            }
+        }
+        return $obj;
+    }
+
+    /**
+     * @param $prop
+     * @return mixed
+     */
+    public function get($prop)
+    {
+        return $this->$prop;
+    }
+
+    /**
+     * @param $prop
+     * @param $value
+     * @return mixed
+     */
+    public function set($prop, $value)
+    {
+        $this->$prop = $value;
+        return $this;
+    }
+
+    /**
+     * @return array
+     */
+    public function getChanges()
+    {
+        return $this->changes;
+    }
+
+    /**
+     *
+     */
+    public function clearChanges()
+    {
+        $this->changes = array();
+    }
+
+    /**
+     * @param $value
+     */
+    private function updateChanges($value)
+    {
+        $trace = debug_backtrace();
+
+        // get the calling method name, eg., setSysId
+        $callerMethod = $trace[1]["function"];
+
+        // perform a replace to remove "set" from the method name and change first letter to lowercase
+        // so, setSysId becomes sysId. This will be the property name that needs to be added to the changes array
+        $prop = preg_replace_callback(
+            "/^set(\w)/",
+            function ($matches) {
+                return strtolower($matches[1]);
+            },
+            $callerMethod
+        );
+
+        // update the changes array to keep track of this properties orig and new values
+        if (!array_key_exists($prop, $this->changes)) {
+            $this->changes[$prop] = (object)array(
+                'originalValue' => $this->$prop,
+                'modifiedValue' => $value
+            );
+        } else {
+            $this->changes[$prop]->modifiedValue = $value;
+        }
+    }
+
+    /**
+     * @param mixed $assetTag
+     * @return $this
+     */
+    public function setAssetTag($assetTag) {
+        $this->updateChanges(func_get_arg(0));
+        $this->assetTag = $assetTag;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getAssetTag() {
+        return $this->assetTag;
+    }
+
+    /**
+     * @param mixed $businessService
+     * @return $this
+     */
+    public function setBusinessService($businessService) {
+        $this->updateChanges(func_get_arg(0));
+        $this->businessService = $businessService;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getBusinessService() {
+        return $this->businessService;
+    }
+
+    /**
+     * @param mixed $cabinet
+     * @return $this
+     */
+    public function setCabinet($cabinet) {
+        $this->updateChanges(func_get_arg(0));
+        $this->cabinet = $cabinet;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getCabinet() {
+        return $this->cabinet;
+    }
+
+    /**
+     * @param mixed $cage
+     * @return $this
+     */
+    public function setCage($cage) {
+        $this->updateChanges(func_get_arg(0));
+        $this->cage = $cage;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getCage() {
+        return $this->cage;
+    }
+
+    /**
+     * @param mixed $comments
+     * @return $this
+     */
+    public function setComments($comments) {
+        $this->updateChanges(func_get_arg(0));
+        $this->comments = $comments;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getComments() {
+        return $this->comments;
+    }
+
+    /**
+     * @param mixed $elevation
+     * @return $this
+     */
+    public function setElevation($elevation) {
+        $this->updateChanges(func_get_arg(0));
+        $this->elevation = $elevation;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getElevation() {
+        return $this->elevation;
+    }
+
+    /**
+     * @param mixed $fqdn
+     * @return $this
+     */
+    public function setFqdn($fqdn) {
+        $this->updateChanges(func_get_arg(0));
+        $this->fqdn = $fqdn;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getFqdn() {
+        return $this->fqdn;
+    }
+
+    /**
+     * @param mixed $location
+     * @return $this
+     */
+    public function setLocation($location) {
+        $this->updateChanges(func_get_arg(0));
+        $this->location = $location;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getLocation() {
+        return $this->location;
+    }
+
+    /**
+     * @param mixed $manufacturer
+     * @return $this
+     */
+    public function setManufacturer($manufacturer) {
+        $this->updateChanges(func_get_arg(0));
+        $this->manufacturer = $manufacturer;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getManufacturer() {
+        return $this->manufacturer;
+    }
+
+    /**
+     * @param mixed $model
+     * @return $this
+     */
+    public function setModel($model) {
+        $this->updateChanges(func_get_arg(0));
+        $this->model = $model;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getModel() {
+        return $this->model;
+    }
+
+    /**
+     * @param mixed $numRUs
+     * @return $this
+     */
+    public function setNumRUs($numRUs) {
+        $this->updateChanges(func_get_arg(0));
+        $this->numRUs = $numRUs;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getNumRUs() {
+        return $this->numRUs;
+    }
+
+    /**
+     * @param mixed $powerStatus
+     * @return $this
+     */
+    public function setPowerStatus($powerStatus) {
+        $this->updateChanges(func_get_arg(0));
+        $this->powerStatus = $powerStatus;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getPowerStatus() {
+        return $this->powerStatus;
+    }
+
+    /**
+     * @param mixed $powerType
+     * @return $this
+     */
+    public function setPowerType($powerType) {
+        $this->updateChanges(func_get_arg(0));
+        $this->powerType = $powerType;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getPowerType() {
+        return $this->powerType;
+    }
+
+    /**
+     * @param mixed $rackUnits
+     * @return $this
+     */
+    public function setRackUnits($rackUnits) {
+        $this->updateChanges(func_get_arg(0));
+        $this->rackUnits = $rackUnits;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getRackUnits() {
+        return $this->rackUnits;
+    }
+
+    /**
+     * @param mixed $serialNum
+     * @return $this
+     */
+    public function setSerialNum($serialNum) {
+        $this->updateChanges(func_get_arg(0));
+        $this->serialNum = $serialNum;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getSerialNum() {
+        return $this->serialNum;
+    }
+
+    /**
+     * @param mixed $voltage
+     * @return $this
+     */
+    public function setVoltage($voltage) {
+        $this->updateChanges(func_get_arg(0));
+        $this->voltage = $voltage;
+        return $this;
+    }
+
+    /**
+     * @return mixed
+     */
+    public function getVoltage() {
+        return $this->voltage;
+    }
+
+}
+
+chdir(__DIR__);
+
+include __DIR__ . "/../config/global.php";
+
+use STS\SNCache;
+
+use STS\CMDB\CMDBRackTable;
+use STS\CMDB\CMDBLocationTable;
+use STS\CMDB\CMDBManufacturerTable;
+
+use STS\CMDB\CMDBCITable;
+use STS\CMDB\CMDBServerTable;
+use STS\CMDB\CMDBStorageDeviceTable;
+use STS\CMDB\CMDBSANSwitchTable;
+use STS\CMDB\CMDBNetworkDeviceTable;
+
+
+try {
+	// read the config file
+	$config = $GLOBALS['config'];
+
+	// get the command line options
+	$options = parseOptions();
+
+	/*********************************************************************/
+	/******************** Log Files & Headers ****************************/
+	/*********************************************************************/
+
+	// general definitions
+	$title      = "ACDC: Import CoLo Assets ";
+	$scriptName = $argv[0];
+	$now        = date("Y-m-d-H-i");
+	$startTime  = time();
+
+	$optsNameWidth    = 25;
+	$summaryNameWidth = 30;
+
+	// open the log file; also keep a log string to send in email if exception is thrown
+	$logString  = "";
+	$logFile    = "{$config->logDir}/import_colo_assets.log";
+	$logFilePtr = fopen($logFile, "w");
+	$errString  = "";
+	$errFile    = "{$config->logDir}/import_colo_assets.err";
+	$errFilePtr = fopen($errFile, "w");
+
+	$release = "1.0";
+
+	$logHeader = "{$title} Log\n";
+	$errHeader = "{$title} Exceptions\n";
+	$runDetails = "" .
+		"\n" .
+		"Release:    {$release}\n" .
+		"Host:       " . gethostname() . "\n" .
+		"SN Site:    {$config->servicenow->site}\n" .
+		"Script:     " . implode(' ', $argv) . "\n" .
+		"Start Time: " . date("Y-m-d H:i:s", $startTime) . "\n" .
+		"\n" .
+		"Options: \n" .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Update",            $options->update       ? "true" : "false") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number",       $options->lineNumber   ? $options->lineNumber  : "N/A") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number Start", $options->lineNumStart ? $options->lineNumStart  : "N/A") .
+		"\n";
+	outlog($logHeader . $runDetails);
+	outerr($errHeader . $runDetails);
+    outerr("\n");
+    outerr(Record::getCSVHeads() . "\n");
+
+
+	/*********************************************************************/
+	/************************* Initialization ****************************/
+	/*********************************************************************/
+
+    // init summary stats
+	$summary = (object) array(
+		"numAssets"         => 0, // total number of ACDC non-decommissioned assets
+
+        "cmdbLocationsNF"   => 0, // number of locations not found in CDMB
+  		"cmdbCabinetsNF"    => 0, // number of racks not found in CMDB
+        "cmdbCabinetsCreated"  => 0, // number of racks created in CMDB
+        "cmdbManufacturersNF" => 0,
+
+    	"cmdbAssetsNF"      => 0, // number of assets not found in CMDB
+        "fqdnMissing"       => 0,
+        "cmdbAssetsCreated" => 0,
+
+        // unused below
+		"missingLoc"        => 0, // number of ACDC assets that are missing a location
+        "missingRack"       => 0, // number of ACDC assets that are missing a rack
+        "missingElev"       => 0, // number of ACDC assets that are missing a rack elevation
+        "missingRUs"        => 0, // number of ACDC assets that are missing the number or RUs
+
+		"numMultiple"       => 0, // number of ACDC assets returning multiple matches in CMDB
+		"numCaseChange"     => 0, // number of CMDB asset names changed from upper to lowercase
+
+		"acdcLocUpdated"     => 0, // number of ACDC assets that had their location updated from CMDB
+        "acdcLocCreated"     => 0, // number of ACDC location created
+		"acdcRackUpdated"    => 0, // number of ACDC assets that had their rack was updated from CMDB
+        "acdcRackCreated"    => 0, // number of ACDC racks created
+		"acdcElevUpdated"    => 0, // number of ACDC assets that had their elevation updated from CMDB
+		"acdcRUsUpdated"     => 0, // number of ACDC assets that had their RUs updated from CMDB
+		"acdcRacksCreated"   => 0, // number of racks created in ACDC from CMDB
+
+		"cmdbLocUpdated"    => 0, // number of CMDB assets that had their location updated from ACDC
+		"cmdbElevUpdated"   => 0, // number of CMDB assets that had their elevation updated from ACDC
+		"cmdbRUsUpdated"    => 0, // number of CMDB assets that had their RUs updated from ACDC
+        "cmdbBladesUpdated" => 0  // number of CMDB blades updated with their chassis info (location, rack & elevation)
+	);
+
+	// instantiate the needed data access objects
+	$assetTable             = new AssetTable();
+	$cabinetTable           = new CabinetTable();
+	$locationTable          = new LocationTable();
+
+    $sncCiTable             = new SNCache\CITable();
+    $sncLocationTable       = new SNCache\LocationTable();
+    $sncRackTable           = new SNCache\RackTable();
+    $sncManufacturerTable   = new SNCache\ManufacturerTable();
+
+	$cmdbLocationTable      = new CMDBLocationTable();
+	$cmdbRackTable          = new CMDBRackTable();
+    $cmdbManufacturerTable  = new CMDBManufacturerTable();
+
+	$cmdbCITable            = new CMDBCITable();
+	$cmdbServerTable        = new CMDBServerTable();
+	$cmdbStorageTable       = new CMDBStorageDeviceTable();
+	$cmdbSanSwitchTable     = new CMDBSanSwitchTable();
+	$cmdbNetworkDeviceTable = new CMDBNetworkDeviceTable();
+
+
+    $indent = "              ";
+
+	/*********************************************************************/
+	/**************************** Main ***********************************/
+	/*********************************************************************/
+
+    // get the contents of the CSV file
+    outlog("\nReading the CSV file: {$options->csvFile}...\n");
+    $records = explode("\n", file_get_contents($options->csvFile));
+
+    // Lose the first header line
+    $numRecords = count($records) - 1;
+    $summary->numAssets = $numRecords;
+    outlog("\t{$numRecords} read\n\n");
+
+    $fd = fopen($options->csvFile, "r");
+    // read the header and discard
+    $fields = fgetcsv($fd);
+
+    /**
+     * Location,Cage,Cabinet,Rack Units,Elevation,Number of Rack Units,Power Status,FQDN,Manufacturer,Model,Serial Number,Asset Tag,Busines Service,Type of Power,Voltage,Comments
+     * Amsterdam-NLD-LVLT,,1.25.02,"26,27",27,2,on,xtldedge-ams01-01.prod.ultradne.net,HP,ProLiant DL385 G7,USE029NJCR,144875,,,,
+     */
+    outlog("Processing records...\n");
+	// loop over each record in the CSV file
+	$lineNum = 0;
+	while ($fields = fgetcsv($fd))
+	{
+	    $lineNum++;
+        $line = $records[$lineNum];
+
+	    if ($options->lineNumber && $lineNum != $options->lineNumber) continue;
+	    if ($options->lineNumStart && $lineNum < $options->lineNumStart) continue;
+
+        outlog(sprintf("\n[%4d of %4d] %s\n", $lineNum, $numRecords, $line));
+        $rec = new Record($fields);
+
+        outlog($rec);
+        outlog("\n");
+
+        // if no fqdn, just skip
+        if (!$rec->getFqdn()) {
+            $summary->fqdnMissing++;
+            outlog("{$indent} NO FQDN, skipping\n");
+            $rec->setComments("NO FQDN, skipping");
+            outerr($rec->toCSV() . "\n");
+            continue;
+        }
+
+
+        // try to find the host in the CMDB
+        outlog(sprintf("{$indent} %-20s", "Name: ", $rec->getFqdn()));
+        try {
+            $cmdbCI = $sncCiTable->getByName($rec->getFqdn());
+            #$cmdbCI = $cmdbCITable->getByName($rec->getFqdn());
+        } catch (\ErrorException $e) {
+            if ($e->getCode() == SNCache\CITable::MULTIPLE_ENTRIES) {
+                outlog("multiple entries found, skipping\n");
+                $rec->setComments("multiple entries found for name " . $rec->getFqdn() . ", skipping");
+                outerr($rec->toCSV() . "\n");
+                continue;
+            }
+        }
+        if (!$cmdbCI->getSysId()) {
+            // try name.
+            outlog("({$rec->getFqdn()}.)...");
+            try {
+                #$cmdbCI = $cmdbCITable->getByNameStartsWith($rec->fqdn . ".");
+                #$query   = "nameSTARTSWITH" . $rec->getFqdn() . "." . $baseQuery;
+                #$results = $cmdbCITable->getByQueryString($query);
+                $cmdbCI = $sncCiTable->getByNameStartsWith($rec->getFqdn() . ".");
+            } catch (\ErrorException $e) {
+                if ($e->getCode() == SNCache\CITable::MULTIPLE_ENTRIES) {
+                    outlog("multiple entries found, skipping\n");
+                    $rec->setComments("multiple entries found for name " . $rec->getFqdn() . ", skipping");
+                    outerr($rec->toCSV() . "\n");
+                    continue;
+                }
+            }
+            if (!$cmdbCI->getSysId() && $rec->getSerialNum()) {
+                // try serial num
+                outlog("({$rec->getSerialNum()})...");
+                try {
+                    #$cmdbCI = $cmdbCITable->getBySerialNumber($rec->getSerialNum());
+                    $cmdbCI = $sncCiTable->getBySerialNumber($rec->getSerialNum());
+                } catch (\ErrorException $e) {
+                    if ($e->getCode() == SNCache\CITable::MULTIPLE_ENTRIES) {
+                        outlog("multiple entries found, skipping\n");
+                        $rec->setComments("multiple entries found for serial number " . $rec->getSerialNum() . ", skipping");
+                        outerr($rec->toCSV() . "\n");
+                        continue;
+                    }
+                }
+            }
+            if (!$cmdbCI && $rec->getAssetTag()) {
+                // try asset tag
+                outlog("({$rec->getAssetTag()})...");
+                try {
+                    #$cmdbCI = $cmdbCITable->getByAssetTag($rec->getAssetTag());
+                    $cmdbCI = $sncCiTable->getByAssetTag($rec->getAssetTag());
+                } catch (\ErrorException $e) {
+                    if ($e->getCode() == SNCache\CITable::MULTIPLE_ENTRIES) {
+                        outlog("multiple entries found, skipping\n");
+                        $rec->setComments("multiple entries found for asset tag " . $rec->getAssetTag() . ", skipping");
+                        outerr($rec->toCSV() . "\n");
+                        continue;
+                    }
+                }
+            }
+        }
+        if (!$cmdbCI->getSysId()) {
+            $summary->cmdbAssetsNF++;
+            outlog("NOT found, skipping for now...\n");
+            $rec->setComments("asset not found");
+            outerr($rec->toCSV() . "\n");
+            // TODO: Create the cmdb asset here, need to know what "type" of asset this is to create it
+            continue;
+        } else {
+            outlog("found\n");
+        }
+
+        // find location
+        outlog(sprintf("{$indent} %-20s", "Location: ", $rec->getLocation()));
+        #$cmdbLocation = $cmdbLocationTable->getByName($rec->getLocation());
+        $cmdbLocation = $sncLocationTable->getByName($rec->getLocation());
+        if ($cmdbLocation->getSysId()) {
+            outlog("found\n");
+        } else {
+            $summary->cmdbLocationsNF++;
+            outlog("NOT found: generating exception\n");
+            $rec->setComments("Location: " . $rec->getLocation() . " not found in CMDB...skipping");
+            outerr($rec->toCSV() . "\n");
+            continue;
+        }
+
+        // find cabinet in location
+        outlog(sprintf("{$indent} %-20s", "Cabinet: ", $rec->getCabinet()));
+        #$cmdbCabinet = $cmdbRackTable->getByNameAndLocationId($rec->getCabinet(), $cmdbLocation->getSysId());
+        $cmdbCabinet = $sncRackTable->getByNameAndLocationId($rec->getCabinet(), $cmdbLocation->getSysId());
+        if ($cmdbCabinet) {
+            outlog("found\n");
+        } else {
+            $summary->cmdbCabinetsNF++;
+            outlog("NOT found, creating...\n");
+            $rec->setComments("Cabinet: " . $rec->getCabinet() . " not found in CMDB...skipping");
+            outerr($rec->toCSV() . "\n");
+            $cmdbCabinet = new \STS\CMDB\CMDBRack();
+            $cmdbCabinet
+                ->setLocationId($cmdbLocation->getSysId())
+                ->setName($rec->getCabinet());
+            if ($options->update) {
+                $cmdbCabinet = $cmdbRackTable->create($cmdbCabinet);
+                $summary->cmdbCabinetsCreated;
+                outlog("created\n");
+            }
+        }
+
+        // find manufacturer
+        if ($rec->getManufacturer()) {
+            outlog(sprintf("{$indent} %-20s", "Manufacturer: ", $rec->getManufacturer()));
+            #$cmdbManufacturer = $cmdbManufacturerTable->getByName($rec->getManufacturer());
+            $cmdbManufacturer = $sncManufacturerTable->getByName($rec->getManufacturer());
+            if ($cmdbManufacturer) {
+                outlog("found\n");
+            } else {
+                $summary->cmdbManufacturersNF++;
+                outlog("NOT found, manufacturer will not be updated\n");
+                $rec->setComments("Manufacturer: " . $rec->getManufacturer() . " not found in CMDB...skipping");
+                outerr($rec->toCSV() . "\n");
+            }
+        }
+
+        // get the CMDB CI from the appropriate table
+        $cmdbTable = getCmdbTable($cmdbCI->getSysClassName());
+        $cmdbCISub = $cmdbTable->getBySysId($cmdbCI->getSysId());
+
+        // compare values of spreadsheet and cmdb
+        outlog("\nComparing values...\n");
+
+        // TODO: compare cage
+        outlog(sprintf("{$indent} %-20s %-20s %-20s%s\n", "FIELD", "ASSET", "CMDB", "ACTION"));
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Manufacturer", $rec->getManufacturer(), $cmdbCI->getManufacturer()));
+        if ($rec->getManufacturer() && $rec->getManufacturer() != $cmdbCI->getManufacturer()) {
+            $action = "UPDATE";
+            $cmdbCISub->setManufacturerId($cmdbManufacturer->getSysId());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Model", $rec->getModel(), $cmdbCI->getModelNumber()));
+        if ($rec->getModel() && $rec->getModel() != $cmdbCI->getModelNumber()) {
+            $action = "UPDATE";
+            $cmdbCISub->setModelNumber($rec->getModel());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Serial Number", $rec->getSerialNum(), $cmdbCI->getSerialNumber()));
+        if ($rec->getSerialNum() && $rec->getSerialNum() != $cmdbCI->getSerialNumber()) {
+            $action = "UPDATE";
+            $cmdbCISub->setSerialNumber($rec->getSerialNum());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Asset Tag", $rec->getAssetTag(), $cmdbCI->getAssetTag()));
+        if ($rec->getAssetTag() && $rec->getAssetTag() != $cmdbCI->getAssetTag()) {
+            $action = "UPDATE";
+            $cmdbCISub->setAssetTag($rec->getAssetTag());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Cabinet", $rec->getCabinet(), $cmdbCISub->getRack()));
+        if ($rec->getCabinet() && $rec->getCabinet() != $cmdbCISub->getRack()) {
+            $action = "UPDATE";
+            $cmdbCISub->setRackId($cmdbCabinet->getSysId());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Elevation", $rec->getElevation(), $cmdbCISub->getRackPosition()));
+        if ($rec->getElevation() && intval($rec->getElevation()) != intval($cmdbCISub->getRackPosition())) {
+            $action = "UPDATE";
+            $cmdbCISub->setRackPosition($rec->getElevation());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog(sprintf("{$indent} %-20s %-20s %-20s", "Num RUs", $rec->getNumRUs(), $cmdbCISub->getNumberOfRackUnits()));
+        if ($rec->getNumRUs() && $rec->getNumRUs() != $cmdbCISub->getNumberOfRackUnits()) {
+            $action = "UPDATE";
+            $cmdbCISub->setNumberOfRackUnits($rec->getNumRUs());
+        } else {
+            $action = "NO CHANGE";
+        }
+        outlog("{$action}\n");
+
+        outlog("\n{$indent}Changes\n");
+        foreach ($cmdbCISub->getChanges() as $prop => $obj) {
+            outlog(sprintf("%14s %-20s %-20s %s\n", " ", $prop, $obj->originalValue, $obj->modifiedValue));
+        }
+    }
+
+
+        /*
+                    // check to see if we have this location in ACDC
+                    $location = $locationTable->getByName($cmdbCI->getLocation());
+                    if ($location->getId()) {
+                        // we have this location; update the info
+                        $location->setSysId($cmdbLocation->getSysId());
+                        $location->setName($cmdbLocation->geName());
+                        $location->setStreet($cmdbLocation->getStreet());
+                        $location->setCity($cmdbLocation->getCity());
+                        $location->setState($cmdbLocation->getState());
+                        $location->setZip($cmdbLocation->getZip());
+
+                        $locationTable->update($location);
+                        $summary->acdcLocUpdated++;
+                        outlog("[ACDC UPDATE]");
+                    } else {
+                        // we don't have this location so we'll have to create it
+                        $location = new Location();
+                        $location->setSysId($cmdbLocation->getSysId());
+                        $location->setName($cmdbLocation->geName());
+                        $location->setStreet($cmdbLocation->getStreet());
+                        $location->setCity($cmdbLocation->getCity());
+                        $location->setState($cmdbLocation->getState());
+                        $location->setZip($cmdbLocation->getZip());
+
+                        $location = $locationTable->create($location);
+                        $summary->acdcLocUCreated++;
+                        outlog("[ACDC CREATE]");
+                    }
+                } else {
+                    outlog("[ACDC NO CHG]");
+                }
+            }
+        */
+
+	// write the summary to the end of the log file and close it
+	outlog(generateSummary());
+    outerr(generateSummary());
+	fclose($logFilePtr);
+	fclose($errFilePtr);
+}
+
+catch (Exception $e) {
+	global $options, $logString, $config, $title;
+
+	$traceBack = "returnCode: 1\n" .
+		"errorCode:  {$e->getCode()}\n" .
+		"errorText:  {$e->getMessage()}\n" .
+		"errorFile:  {$e->getFile()}\n" .
+		"errorLine:  {$e->getLine()}\n" .
+		"errorStack: {$e->getTraceAsString()}\n";
+
+	outlog("{$traceBack}\n");
+
+	if (isset($summary)) {
+		#outlog(generateSummary());
+	}
+	exit;
+}
+
+/**
+ * @param $sysClassName
+ * @return CMDBNetworkDeviceTable|CMDBSANSwitchTable|CMDBServerTable|CMDBStorageDeviceTable
+ * @throws ErrorException
+ */
+function getCmdbTable($sysClassName)
+{
+    switch ($sysClassName) {
+        case "cmdb_ci_server":
+            return new \STS\SNCache\ServerTable();
+            break;
+        case "cmdb_ci_msd":
+            return new \STS\SNCache\StorageDeviceTable();
+            break;
+        case "u_san_switches_storage":
+            return new \STS\SNCache\SANSwitchTable();
+            break;
+        case "cmdb_ci_netgear":
+            return new \STS\SNCache\NetworkDeviceTable();
+            break;
+        default:
+            throw new ErrorException("Unknown sys_class_name: " . $sysClassName);
+    }
+}
+
+
+function parseOptions()
+{
+	// command line opts
+	$opts = getopt('hun:N:f:');
+
+	// usage if -h
+	if ($opts && array_key_exists('h', $opts)) {
+		usage();
+	}
+
+	if (!array_key_exists('f', $opts)) {
+	    outlog("ERROR: No CSV file specified.\n");
+	    usage();
+	}
+
+	// define options
+	$options = (object) array(
+		"update"       => array_key_exists('u', $opts) ? true : false,
+		"csvFile"      => array_key_exists('f', $opts) ? $opts['f'] : false,
+		"lineNumber"   => array_key_exists('n', $opts) ? $opts['n'] : false,
+		"lineNumStart" => array_key_exists('N', $opts) ? $opts['N'] : false
+	);
+
+	return $options;
+}
+
+function usage()
+{
+	print "Usage: import_colo_assets [-hu][-n line_number][-N line_number] -f csv_file\n";
+	print "\n";
+	print "       -f csv_file  CSV file containing the assets to be imported\n";
+	print "       -h           this help\n";
+	print "       -u           update data\n";
+	print "       -n lineNum   process line number lineNum\n";
+	print "       -N lineNum   start processing at line number lineNum\n";
+	exit;
+}
+
+function generateSummary()
+{
+	global $startTime, $summary, $summaryNameWidth;
+
+	// calc elapsed time
+	$endTime       = time();
+	$elapsedSecs   = $endTime - $startTime;
+	$elapsedFormat = sprintf("%02d:%02d", floor($elapsedSecs / 60), $elapsedSecs % 60);
+
+	return sprintf("\n\nSummary\n%'-60s\n", "") .
+
+	sumOutput("Total Assets", $summary->numAssets) .
+
+    sumOutput("FQDN Missing", $summary->fqdnMissing, $summary->numAssets) .
+    sumOutput("CMDB Not Found", $summary->cmdbAssetsNF, $summary->numAssets) .
+
+	#sumOutput("ACDC Location Missing", $summary->missingLoc, $summary->numAssets) .
+    #sumOutput("ACDC Rack Missing", $summary->missingRack, $summary->numAssets) .
+    #sumOutput("ACDC Elevation Missing", $summary->missingElev, $summary->numAssets) .
+    #sumOutput("ACDC RUs Missing", $summary->missingRUs, $summary->numAssets) .
+    #"\n" .
+    #sumOutput("CMDB Found", $summary->numFound, $summary->numAssets) .
+    #sumOutput("CMDB Case Change", $summary->numCaseChange, $summary->numAssets) .
+   	#sumOutput("CMDB Multiple", $summary->numMultiple, $summary->numAssets) .
+   	#sumOutput("CMDB Rack Not Found", $summary->rackNotFound, $summary->numAssets) .
+    #"\n" .
+	#sumOutput("ACDC Locations Updated", $summary->acdcLocUpdated, $summary->numAssets) .
+    #sumOutput("ACDC Locations Created", $summary->acdcLocCreated, $summary->numAssets) .
+	#sumOutput("ACDC Racks Updated", $summary->acdcRackUpdated, $summary->numAssets) .
+	#sumOutput("ACDC Racks Created", $summary->acdcRacksCreated, $summary->numAssets) .
+	#sumOutput("ACDC Elevations Updated", $summary->acdcElevUpdated, $summary->numAssets) .
+	#sumOutput("ACDC RUs Updated", $summary->acdcRUsUpdated, $summary->numAssets) .
+    #"\n" .
+	#sumOutput("CMDB Locations Updated", $summary->cmdbLocUpdated, $summary->numAssets) .
+	#sumOutput("CMDB Racks Updated", $summary->cmdbRackUpdated, $summary->numAssets) .
+	#sumOutput("CMDB Elevations Updated", $summary->cmdbElevUpdated, $summary->numAssets) .
+	#sumOutput("CMDB RUs Updated", $summary->cmdbRUsUpdated, $summary->numAssets) .
+	#"\n" .
+    #sumOutput("CMDB Blades Updated", $summary->cmdbBladesUpdated) .
+    "\n" .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Start Time", date("Y-m-d H:i:s", $startTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "End Time", date("Y-m-d H:i:s", $endTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Elapsed Time", $elapsedFormat) .
+	"Synchronization Complete\n";
+}
+
+function sumOutput($title, $count, $total = null)
+{
+	global $summaryNameWidth;
+
+	if ($total) {
+		return sprintf("%-{$summaryNameWidth}s: %5d (%4.1f%%)\n", $title, $count, round($count / $total * 100, 1));
+	}
+	else {
+		return sprintf("%-{$summaryNameWidth}s: %5d\n", $title, $count);
+	}
+}
+
+function outlog($logMsg)
+{
+	global $logFilePtr, $logString;
+
+    print $logMsg;
+
+    if (isset($logFilePtr) && is_resource($logFilePtr)) {
+    	fwrite($logFilePtr, $logMsg);
+    }
+	$logString .= $logMsg;
+}
+
+function outerr($errMsg)
+{
+	global $errFilePtr, $errString;
+
+    if (isset($errFilePtr) && is_resource($errFilePtr)) {
+    	fwrite($errFilePtr, $errMsg);
+    }
+	$errString .= $errMsg;
+}
+
+/** @var $e Exception */
+function printException($e)
+{
+	outlog("\n");
+	outlog(sprintf("%-12s => %s\n", "returnCode", 1));
+	outlog(sprintf("%-12s => %s\n", "errorCode", $e->getCode()));
+	outlog(sprintf("%-12s => %s\n", "errorText", $e->getMessage()));
+	outlog(sprintf("%-12s => %s\n", "errorFile", $e->getFile()));
+	outlog(sprintf("%-12s => %s\n", "errorLine", $e->getLine()));
+	outlog(sprintf("%-12s => \n%s\n", "errorStack", $e->getTraceAsString()));
+	exit;
+}
+

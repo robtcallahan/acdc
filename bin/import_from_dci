@@ -1,0 +1,328 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: import_from_dci 81566 2013-12-02 15:39:06Z rcallaha $
+ * $Date: 2013-12-02 10:39:06 -0500 (Mon, 02 Dec 2013) $
+ * $Author: rcallaha $
+ * $Revision: 81566 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/import_from_dci $
+ *
+ *******************************************************************************
+ */
+
+chdir(__DIR__);
+
+include __DIR__ . "/../config/global.php";
+
+try {
+    // read the config file
+    $config = $GLOBALS['config'];
+
+    // get the command line options
+    $options = parseOptions();
+
+    /*********************************************************************/
+    /******************** Log Files & Headers ****************************/
+    /*********************************************************************/
+
+    // general definitions
+    $title      = "ACDC: Import from DCI";
+    $scriptName = $argv[0];
+    $now        = date("Y-m-d-H-i");
+    $startTime  = time();
+
+    $optsNameWidth    = 25;
+    $summaryNameWidth = 30;
+
+    // open the log file; also keep a log string to send in email if exception is thrown
+    $logString  = "";
+    $logFile    = "{$config->logDir}/{$config->dciImportLogFileName}.{$now}";
+    $logFilePtr = fopen($logFile, "w");
+
+    $release = trim(file_get_contents("../ABOUT"));
+
+    $logHeader = "{$title} Log\n" .
+        "\n" .
+        "Release:    {$release}\n" .
+        "Host:       " . gethostname() . "\n" .
+        "SN Site:    {$config->servicenow->site}\n" .
+        "Script:     " . implode(' ', $argv) . "\n" .
+        "Start Time: " . date("Y-m-d H:i:s", $startTime) . "\n" .
+        "\n" .
+        "Options: \n" .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "StdOut", $options->stdOut ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Update", $options->update ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Target Host", $options->targetHost ? $options->targetHost : "N/A") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Cabinet Name", $options->cabinetName ? $options->cabinetName : "N/A") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Location Name", $options->locationName ? $options->locationName : "N/A") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number", $options->lineNumber ? $options->lineNumber : "N/A") .
+        "\n";
+    outlog($logHeader);
+
+
+    // prune old log files
+    outlog("Cleaning up old log files...\n");
+    $logFiles        = explode("\n", `ls -t $config->logDir/$config->dciImportLogFileName.*`);
+    $todayMinusPrune = $startTime - (60 * 60 * 24 * $config->pruneAfter);
+    $todayMinus1     = $startTime - (60 * 60 * 24 * 1);
+    for ($i = 0; $i < count($logFiles); $i++) {
+        $f = $logFiles[$i];
+        if ($f === "") {
+            break;
+        }
+
+        $stat  = stat($f);
+        $mTime = $stat[9];
+        if ($mTime < $todayMinusPrune) {
+            // log file is older than 7 days; delete
+            outlog("\tPruning {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+            unlink($f);
+        } else if ($config->compressLogs && !preg_match("/.*\.gz$/", $f) && $mTime < $todayMinus1) {
+            // log file is older than 1 day; compress
+            outlog("\tCompressing {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+            $out = `gzip $f`;
+        }
+    }
+    outlog("\n");
+
+    /*********************************************************************/
+    /************************* Initialization ****************************/
+    /*********************************************************************/
+
+    // instantiate the needed data access objects
+    $dciAssetTable = new DCIAssetTable();
+
+    $assetTable    = new AssetTable();
+    $cabinetTable  = new CabinetTable();
+    $locationTable = new LocationTable();
+    $assetStateTable = new AssetStateTable();
+
+    /*********************************************************************/
+    /**************************** Main ***********************************/
+    /*********************************************************************/
+
+    // get a list of state values to decode the state text that was passed (state is a separate table)
+    $assetStateHash = $assetStateTable->getHashByName();
+    $installedStateId = $assetStateHash['Installed'];
+
+    outlog("Getting a list of DCI assets...\n");
+    $dciAssets    = $dciAssetTable->getAll();
+    $numDciAssets = count($dciAssets);
+    outlog("\t" . $numDciAssets . " assets found\n");
+
+    $i = 0;
+    foreach ($dciAssets as $dciAsset) {
+        $i++;
+        $location = null;
+        $cabinet  = null;
+        $asset    = null;
+
+        // skip assets that are 3 letters are less, eg., E01
+        if (strlen($dciAsset->getHostName()) <= 3) continue;
+
+        // skip assets where the model name is 'Cabinet'
+        if ($dciAsset->getModel() == 'Cabinet') continue;
+
+        // name to lower
+        $dciAsset->setHostName(strtolower($dciAsset->getHostName()));
+
+
+        // check for command line options
+        if ($options->targetHost && $dciAsset->getHostName() != $options->targetHost) {
+            continue;
+        } else if ($options->cabinetName && $dciAsset->getRack() != $options->cabinetName) {
+            continue;
+        } else if (!preg_match("/" . $options->locationName . "/", $dciAsset->getLocation())) {
+            continue;
+        } else if ($options->lineNumber && $i + 1 < $options->lineNumber) {
+            continue;
+        }
+
+        outlog(sprintf("[%4d of %4d] %-30s", $i, $numDciAssets, $dciAsset->getHostName()));
+
+        // correct location between DCI and CMDB
+        if ($dciAsset->getLocation() == "Sterling" || $dciAsset->getLocation() == "sterling") {
+            $dciAsset->setLocation("Sterling-VA-NSR-B8");
+        } else if ($dciAsset->getLocation() == "Charlotte") {
+            $dciAsset->setLocation("Charlotte-NC-CLT-1");
+        } else if ($dciAsset->getLocation() == "Charlotte CLT-1") {
+            $dciAsset->setLocation("Charlotte-NC-CLT-1");
+        } else if ($dciAsset->getLocation() == "Charlotte CLT-3") {
+            $dciAsset->setLocation("Charlotte-NC-CLT-3");
+        } else if ($dciAsset->getLocation() == "Ashburn EQABDC2") {
+            $dciAsset->setLocation("Ashburn-VA-EQIX-DC2");
+        } else if ($dciAsset->getLocation() == "Concord") {
+            $dciAsset->setLocation("Concord-CA-NSR");
+        } else if ($dciAsset->getLocation() == "Building 1") {
+            $dciAsset->setLocation("Sterling-VA-NSR-B1");
+        } else if ($dciAsset->getLocation() == "Building 8") {
+            $dciAsset->setLocation("Sterling-VA-NSR-B8");
+        } else if ($dciAsset->getLocation() == "Building 6") {
+            $dciAsset->setLocation("Sterling-VA-JK-Moving");
+        } else if ($dciAsset->getLocation() == "DC Office") {
+            $dciAsset->setLocation("Building 8 Storage");
+        }
+
+
+        // Create/update the location entry
+        if ($dciAsset->getLocation() != "") {
+            $location = $locationTable->getByName($dciAsset->getLocation());
+            if (!$location->getId()) {
+                outlog("Location " . $dciAsset->getLocation() . " NOT FOUND ");
+                $location = new Location();
+                $location->setId(0);
+            }
+        } else {
+            outlog("Location " . $dciAsset->getLocation() . " NOT FOUND ");
+            $location = new Location();
+            $location->setId(0);
+        }
+
+        // Create/update the cabinet entry in our local database
+        $upperRack = $dciAsset->getRack();
+        $cabinet = $cabinetTable->getByName($upperRack);
+        if ($cabinet->getId() == "") {
+            $cabinet->setLocationId($location->getId());
+            $cabinet->setName($upperRack);
+            $cabinet->setCabinetTypeId(1);
+            $cabinet->setX(50);
+            $cabinet->setY(50);
+            $cabinet = $cabinetTable->create($cabinet);
+        }
+
+        $asset = new Asset();
+        // define the elevation. if "" or 0, set to null
+        $elevation = $dciAsset->getElevation();
+        $elevation = $elevation == "" ? null : $elevation;
+        $elevation = $elevation == 0 ? null : $elevation;
+        $asset->setCabinetId($cabinet->getId())
+            ->setSysId(null)
+            ->setSysClassName(null)
+            ->setLabel($dciAsset->getHostName())
+            ->setManufacturer(null)
+            ->setModel($dciAsset->getModel())
+            ->setSerialNumber(strtoupper($dciAsset->getSerialNumber()))
+            ->setAssetTag(strtoupper($dciAsset->getAssetNumber()))
+            ->setElevation($dciAsset->getElevation())
+            ->setNumRUs($dciAsset->getNumberOfRackUnits())
+            ->setAssetStateId($installedStateId)
+            ->setPowerStatus("ON")
+            ->setLastUpdate(date('Y-m-d h:i:s'));
+
+        // TODO: need to add cabinet in where clause as well which means looking up in cabinet table and using its id in the where clause
+        $where = "label = '" . $dciAsset->getHostName() . "' AND model = '" . $dciAsset->getModel() . "' AND serialNumber = '" . $dciAsset->getSerialNumber() . "' AND " .
+            "assetTag = '" . $dciAsset->getAssetNumber() . "' AND elevation = " . ($dciAsset->getElevation() ? $dciAsset->getElevation() : 0) . " AND numRUs = " . ($dciAsset->getNumberOfRackUnits() ? $dciAsset->getNumberOfRackUnits() : 0);
+        $existingAssets = $assetTable->getWhere($where);
+        if (count($existingAssets) > 0) {
+            outlog(sprintf("%-8s\n", "UPDATE"));
+            $asset->setId($existingAssets[0]->getId());
+            $assetTable->update($asset);
+        } else {
+            outlog(sprintf("%-8s\n", "CREATE"));
+            $asset = $assetTable->create($asset);
+        }
+    }
+
+} catch (Exception $e) {
+    global $options, $logString, $config, $title;
+
+    $emailTo   = $config->adminEmail;
+    $emailFrom = $config->adminEmail;
+    $emailSubj = "ACDC: {$title} Error Report";
+
+    $headers = implode("\r\n", array(
+        "MIME-Version: 1.0",
+        "Content-type: text/html; charset=us-ascii",
+        "From: {$emailFrom}",
+        "Reply-To: {$emailFrom}",
+        "X-Priority: 1",
+        "X-MSMail-Priority: High",
+        "X-Mailer: PHP/" . phpversion()
+    ));
+
+    $traceBack = "returnCode: 1\n" .
+        "errorCode:  {$e->getCode()}\n" .
+        "errorText:  {$e->getMessage()}\n" .
+        "errorFile:  {$e->getFile()}\n" .
+        "errorLine:  {$e->getLine()}\n" .
+        "errorStack: {$e->getTraceAsString()}\n";
+
+    outlog("{$traceBack}\n");
+
+    if (isset($summary)) {
+        outlog(generateSummary());
+    }
+
+    if (!$options->stdOut) {
+        $emailBody = "<pre style='font-size:6pt;'>\n" .
+            "{$logString}\n" .
+            "</pre>\n";
+        mail($emailTo, $emailSubj, $emailBody, $headers);
+    }
+    exit;
+}
+
+
+function parseOptions()
+{
+    // command line opts
+    $opts = getopt('hust:c:w:n:');
+
+    // usage if -h
+    if ($opts && array_key_exists('h', $opts)) {
+        usage();
+    }
+
+    // define options
+    $options = (object)array(
+        "stdOut"       => array_key_exists('s', $opts) ? true : false,
+        "update"       => array_key_exists('u', $opts) ? false : true,
+        "targetHost"   => array_key_exists('t', $opts) ? strtolower($opts['t']) : false,
+        "cabinetName"  => array_key_exists('c', $opts) ? $opts['c'] : false,
+        "locationName" => array_key_exists('w', $opts) ? $opts['w'] : false,
+        "lineNumber"   => array_key_exists('n', $opts) ? $opts['n'] : false
+    );
+
+    return $options;
+}
+
+function usage()
+{
+    print "Usage: import_from_dci [-hsu][-t target_host][-c cabinet][-w location][-n line_number]\n";
+    print "\n";
+    print "       -h           this help\n";
+    print "       -u           no updates, just show actions\n";
+    print "       -s           outlog to STDOUT in real time\n";
+    print "       -t host      target host; only run against this host\n";
+    print "       -c cabinet   process all hosts within the named cabinet\n";
+    print "       -w location  process all hosts in the named location\n";
+    print "       -n lineNum   start at line number lineNum\n";
+    exit;
+}
+
+function outlog($logMsg)
+{
+    global $options, $logFilePtr, $logString;
+
+    if ($options->stdOut) {
+        print $logMsg;
+    }
+    fwrite($logFilePtr, $logMsg);
+    $logString .= $logMsg;
+}
+
+/** @var $e Exception */
+function printException($e)
+{
+    outlog("\n");
+    outlog(sprintf("%-12s => %s\n", "returnCode", 1));
+    outlog(sprintf("%-12s => %s\n", "errorCode", $e->getCode()));
+    outlog(sprintf("%-12s => %s\n", "errorText", $e->getMessage()));
+    outlog(sprintf("%-12s => %s\n", "errorFile", $e->getFile()));
+    outlog(sprintf("%-12s => %s\n", "errorLine", $e->getLine()));
+    outlog(sprintf("%-12s => \n%s\n", "errorStack", $e->getTraceAsString()));
+    exit;
+}
+
+?>

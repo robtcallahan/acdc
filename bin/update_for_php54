@@ -1,0 +1,65 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: update_for_php54 80341 2013-10-25 14:05:03Z rcallaha $
+ * $Date: 2013-10-25 10:05:03 -0400 (Fri, 25 Oct 2013) $
+ * $Author: rcallaha $
+ * $Revision: 80341 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/update_for_php54 $
+ *
+ *******************************************************************************
+ */
+
+include __DIR__ . "/../config/global.php";
+
+try
+{
+    $config = $GLOBALS['config'];
+
+    $file = $argv[1];
+
+    $contents = file_get_contents($file);
+    $recs = explode("\n", $contents);
+    for ($i=0; $i<count($recs); $i++) {
+        $r = $recs[$i];
+
+        /* CMDB classes */
+        if (preg_match("/^(.*)parent::update(.*)$/", $r, $m)) {
+            $recs[$i] = $m[1] . '$this->update' . $m[2];
+        }
+        else if (preg_match("/^(.*)parent::create(.*)$/", $r, $m)) {
+            $recs[$i] = $m[1] . '$this->create' . $m[2];
+        }
+
+        /* database classes */
+        /*
+        if (preg_match("/public function create/", $r)) {
+            $recs[$i] = '    public function create($o, $sql="")';
+        }
+        else if (preg_match("/public function update/", $r)) {
+            $recs[$i] = '    public function update($o, $idColumn = "id", $sql = "")';
+        }
+        else if (preg_match("/public function delete/", $r)) {
+            $recs[$i] = '    public function delete($o, $idColumn = "id", $sql = "")';
+        }
+        */
+    }
+    file_put_contents($file, implode("\n", $recs));
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+
+?>

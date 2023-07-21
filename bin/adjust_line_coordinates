@@ -1,0 +1,49 @@
+#!/usr/bin/php
+<?php
+
+include __DIR__ . "/../config/global.php";
+
+try
+{
+    $config = $GLOBALS['config'];
+
+    $lineTable = new LineTable();
+    $lines = $lineTable->getAllByLocationId(14);
+
+    foreach ($lines as $l) {
+        $l->setLeft(($l->getX2() + $l->getX1()) / 2 * 24)
+          ->setTop(($l->getY2() + $l->getY1()) / 2  * 24)
+          ->setWidth(abs($l->getX2() - $l->getX1()) * 24)
+          ->setHeight(abs($l->getY2() - $l->getY1()) * 24);
+
+        if ($l->getX1() == $l->getX2()) {
+            $half = abs($l->getY2() - $l->getY1()) / 2;
+            $l->setX1(0.00)
+              ->setX2(0.00)
+              ->setY1(-$half * 24)
+              ->setY2($half * 24);
+        } else {
+            $half = abs($l->getX2() - $l->getX1()) / 2;
+            $l->setX1(-$half * 24)
+              ->setX2($half * 24)
+              ->setY1(0.00)
+              ->setY2(0.00);
+        }
+        $l = $lineTable->update($l);
+    }
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+

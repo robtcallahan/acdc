@@ -1,0 +1,101 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: elevation_is_zero 77193 2013-07-26 17:40:04Z rcallaha $
+ * $Date: 2013-07-26 13:40:04 -0400 (Fri, 26 Jul 2013) $
+ * $Author: rcallaha $
+ * $Revision: 77193 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/elevation_is_zero $
+ *
+ *******************************************************************************
+ */
+
+include __DIR__ . "/../config/global.php";
+
+try
+{
+	$config = $GLOBALS['config'];
+
+    $dciAssetTable = new DCIAssetTable();
+	$dciHistoryTable = new DCIHistoryTable();
+
+	outlog("Getting a list of DCI assets...\n");
+    $dciAssetHash = $dciAssetTable->getAllHashZeroElevationOrZeroRUs();
+	outlog("\t" . count($dciAssetHash) . " assets found\n");
+
+	outlog("Getting a hash of decommissioned assets...\n");
+	$dciHistoryHash = $dciHistoryTable->getDecommissionedHashByHostName();
+	outlog("\t" . count($dciHistoryHash) . " decommissioned assets found\n");
+
+	outlog("Filtering out decommissioned assets by host name...\n");
+	$removed = 0;
+	foreach ($dciHistoryHash as $hostName => $dciHistory) {
+		if (array_key_exists($hostName, $dciAssetHash)) {
+			unset($dciAssetHash[$hostName]);
+			$removed++;
+		}
+	}
+	outlog("\t" . $removed . " decommissioned assets removed\n");
+
+	// make a hash by serial number
+	$dciAssetHashBySN = array();
+	/** @var $dciAsset DCIAsset */
+	foreach ($dciAssetHash as $hostName => $dciAsset) {
+		$dciAssetHashBySN[$dciAsset->getSerialNumber()] = $dciAsset;
+	}
+
+	$dciHistoryHash = $dciHistoryTable->getDecommissionedHashBySerialNumber();
+	outlog("Filtering out decommissioned assets by serial number...\n");
+	$removed = 0;
+	foreach ($dciHistoryHash as $serialNumber => $dciHistory) {
+		if (array_key_exists($serialNumber, $dciAssetHashBySN)) {
+			unset($dciAssetHashBySN[$serialNumber]);
+			$removed++;
+		}
+	}
+	outlog("\t" . $removed . " decommissioned assets removed\n");
+
+	// put the assets back into a normal array
+	$dciAssets = array();
+	foreach ($dciAssetHashBySN as $serialNumber => $dciAsset) {
+		$dciAssets[] = $dciAsset;
+	}
+	unset($dciAssetHash);
+	unset($dciAssetHashBySN);
+	unset($dciHistoryHash);
+
+
+    print "DataCenter,Rack,Elevation,RUs,Hostname,SerialNumber,AssetNumber\n";
+    for ($i=0; $i<count($dciAssets); $i++) {
+		/** @var $a DCIAsset */
+        $a = $dciAssets[$i];
+        print $a->getLocation() . "," .
+              $a->getRack() . "," .
+              $a->getElevation() . "," .
+              $a->getNumberOfRackUnits() . "," .
+              $a->getHostName() . "," .
+              $a->getSerialNumber() . "," .
+              $a->getAssetNumber() . "\n";
+    }
+}
+
+catch(Exception $e)
+{
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}
+function outlog($logMsg)
+{
+	print $logMsg;
+}
+
+?>

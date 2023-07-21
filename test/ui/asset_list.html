@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head profile="http://selenium-ide.openqa.org/profiles/test-case">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<link rel="selenium.base" href="https://stopcdvvt3.va.neustar.com/~rcallaha/acdc/" />
+<title>Asset List</title>
+</head>
+<body>
+<table cellpadding="1" cellspacing="1" border="1">
+<thead>
+<tr><td rowspan="1" colspan="3">New Test</td></tr>
+</thead><tbody>
+<!-- Load ACDC -->
+<tr>
+	<td>open</td>
+	<td>/~rcallaha/acdc/</td>
+	<td></td>
+</tr>
+<!-- Click on the Asset List tab -->
+<tr>
+	<td>click</td>
+	<td>//li[@id='tabpanel__list-tab']//a[2]</td>
+	<td></td>
+</tr>
+<!-- Select Charlotte radio button -->
+<tr>
+	<td>click</td>
+	<td>//input[@id='location-cb-charlotte']</td>
+	<td></td>
+</tr>
+<!-- Wait for Charlotte assets to load (checking for at least 1 row) -->
+<tr>
+	<td>waitForElementPresent</td>
+	<td>//div[@id='tabpanel']//div[@class='x-grid3-body']//div[400]</td>
+	<td></td>
+</tr>
+<!-- check for the asset chbkqtl1 -->
+<tr>
+	<td>verifyElementPresent</td>
+	<td>//div[@id='tabpanel']//div[@class='x-grid3-body']//div[7]//td[2]/div[text()='chbkqtl1.nc.neustar.com']</td>
+	<td></td>
+</tr>
+<!-- Click on this row -->
+<tr>
+	<td>click</td>
+	<td>//div[@id='tabpanel']//div[@class='x-grid3-body']//div[7]//td[2]/div[text()='chbkqtl1.nc.neustar.com']</td>
+	<td></td>
+</tr>
+<!-- Wait for asset details to load in east panel -->
+<tr>
+	<td>waitForElementPresent</td>
+	<td>//div[@id='east-panel']//div[@class='x-grid3-body']//div[4]//td[2]//div</td>
+	<td></td>
+</tr>
+</tbody></table>
+</body>
+</html>

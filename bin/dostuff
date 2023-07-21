@@ -1,0 +1,143 @@
+#!/usr/bin/php
+<?php
+
+// default time zone
+date_default_timezone_set("America/New_York");
+
+// define the include path where all our class files are found
+$dirName = dirName(__DIR__);
+set_include_path(
+    implode(':',
+            array(
+                "{$dirName}/lib",
+                "{$dirName}/../sts-lib",
+                "/var/www/html/sts-lib",
+                "/usr/share/pear",
+                "/var/www/html/phpexcel/Classes"
+            )
+    )
+);
+
+// register our autoloader that replaces '\' with '/' and '_' with ''
+spl_autoload_register(function ($className) {
+    $className = (string)str_replace('\\', DIRECTORY_SEPARATOR, $className);
+    $className = str_replace('_', DIRECTORY_SEPARATOR, $className);
+    require_once("{$className}.php");
+});
+
+// Require that all errors detected are thrown
+set_error_handler(
+    create_function(
+        '$errLevel, $errString, $errFile, $errLine',
+        'throw new ErrorException($errString, 0, $errLevel, $errFile, $errLine);'),
+    E_ALL
+);
+
+// read the config file and add to $GLOBALS
+$GLOBALS['config'] = require($dirName . "/config/config.php");
+
+
+try {
+    $config = $GLOBALS['config'];
+
+
+    /*
+    // question 1
+	$cards = array(
+        "A" => 1,
+        "2" => 2,
+        "3" => 3,
+        "4" => 4,
+        "5" => 5,
+        "6" => 6,
+        "7" => 7,
+        "8" => 8,
+        "9" => 9,
+        "T" => 10,
+        "J" => 11,
+        "Q" => 12,
+        "K" => 13
+    );
+
+    $bobFile = file_get_contents(__DIR__ . "/programmingContest3Bob.txt");
+    $aliceFile = file_get_contents(__DIR__ . "/programmingContest3Alice.txt");
+
+    $bobsCards = array();
+    for ($i=0; $i<strlen($bobFile); $i++) {
+        $bobsCards[] = $bobFile[$i];
+    }
+
+    $aliceCards = array();
+    for ($i = 0; $i < strlen($aliceFile); $i++) {
+        $aliceCards[] = $aliceFile[$i];
+    }
+
+    $gameOver = false;
+    $winner = null;
+
+    while(!$gameOver) {
+        $bob   = array_shift($bobsCards);
+        $alice = array_shift($aliceCards);
+
+        if ($cards[$bob] > $cards[$alice]) {
+            $bobsCards[] = $bob;
+            $bobsCards[] = $alice;
+        } else if ($cards[$alice] > $cards[$bob]) {
+            $aliceCards[] = $alice;
+            $aliceCards[] = $bob;
+        } else {
+            // do nothing
+        }
+
+        if (count($bobsCards) < 1) {
+            $winner = "alice";
+            $gameOver = true;
+        }
+        if (count($aliceCards) < 1) {
+            $winner = "bob";
+            $gameOver = true;
+        }
+    }
+
+    // print something out here
+
+    print "Winner {$winner}\n";
+    print "Winner's deck size " . ($winner == "bob" ? count($bobsCards) : count($aliceCards)) . "\n";
+    print $bob . " - " . $alice . "\n";
+
+    */
+
+    // Given a distance of 110 km, 54 m, 3 cm and 2 mm, how many days will it take before Simon has run that far cumulatively?
+    $totalMms = 2 + 30 + 54000 + 110000000;
+    $dayNum = 0;
+    $notThere = true;
+    $cummulator = 0;
+    $mmsPerDay = 0;
+    while($notThere) {
+        $dayNum++;
+        if (preg_match("/1/", $dayNum) && preg_match("/3/", $dayNum)) {
+            continue;
+        }
+        if ($dayNum % 7 == 0) continue;
+
+        $mmsPerDay++;
+        $cummulator += $mmsPerDay;
+
+        if ($cummulator >= $totalMms) {
+            $notThere = false;
+        }
+    }
+    print $dayNum . "\n";
+}
+catch(Exception $e) {
+	print_r(
+		array(
+			"returnCode" => 1,
+			"errorCode"  => $e->getCode(),
+			"errorText"  => $e->getMessage(),
+			"errorFile"  => $e->getFile(),
+			"errorLine"  => $e->getLine(),
+			"errorStack" => $e->getTraceAsString()
+			)
+		);
+}

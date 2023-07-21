@@ -1,0 +1,619 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: acdc_cmdb_lookup 81526 2013-11-28 19:27:43Z rcallaha $
+ * $Date: 2013-11-28 14:27:43 -0500 (Thu, 28 Nov 2013) $
+ * $Author: rcallaha $
+ * $Revision: 81526 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/acdc_cmdb_lookup $
+ *
+ *******************************************************************************
+ */
+
+chdir(__DIR__);
+
+include __DIR__ . "/../config/global.php";
+
+use STS\CMDB\CMDBCI;
+use STS\CMDB\CMDBCITable;
+
+use STS\CMDB\CMDBRackTable;
+use STS\CMDB\CMDBLocationTable;
+
+use STS\CMDB\CMDBServerTable;
+use STS\CMDB\CMDBStorageDeviceTable;
+use STS\CMDB\CMDBSANSwitchTable;
+use STS\CMDB\CMDBNetworkDeviceTable;
+
+use STS\HPSIM\HPSIMChassisTable;
+use STS\HPSIM\HPSIMBladeTable;
+
+use STS\Util\SysLog;
+
+try {
+    // read the config file
+    $config = $GLOBALS['config'];
+
+    // get the command line options
+    $options = parseOptions();
+
+    // initialize syslog
+    $sysLog = new SysLog($config->appName);
+    $sysLog->setLogLevel(STS\Util\SysLog::DEBUG);
+
+    // check to see if we should run
+    if (!$config->runCronJobs && !$options->forceRun) {
+        print "runCronJobs is set to false in the config file. Exiting...\n";
+        exit;
+    }
+
+    /*********************************************************************/
+    /******************** Log Files & Headers ****************************/
+    /*********************************************************************/
+
+    // general definitions
+    $title      = "ACDC: CMDB Lookup";
+    $scriptName = $argv[0];
+    $now        = date("Y-m-d-H-i");
+    $startTime  = time();
+
+    $optsNameWidth    = 25;
+    $summaryNameWidth = 30;
+
+    // open the log file; also keep a log string to send in email if exception is thrown
+    $logString  = "";
+    $logFile    = "{$config->logDir}/{$config->acdcCmdbLookupFileName}.{$now}";
+    $logFilePtr = fopen($logFile, "w");
+
+    $release = trim(file_get_contents("../ABOUT"));
+
+    $logHeader = "{$title} Log\n" .
+        "\n" .
+        "Release:    {$release}\n" .
+        "Host:       " . gethostname() . "\n" .
+        "SN Site:    {$config->servicenow->site}\n" .
+        "Script:     " . implode(' ', $argv) . "\n" .
+        "Start Time: " . date("Y-m-d H:i:s", $startTime) . "\n" .
+        "\n" .
+        "Options: \n" .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "StdOut", $options->stdOut ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Update", $options->update ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Force Run", $options->forceRun ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Target Host", $options->targetHost ? $options->targetHost : "N/A") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number", $options->lineNumber ? $options->lineNumber : "N/A") .
+        "\n";
+    outlog($logHeader);
+
+
+    // prune old log files
+    outlog("Cleaning up old log files...\n");
+    $logFiles        = explode("\n", `ls -t $config->logDir/$config->acdcCmdbLookupFileName.*`);
+    $todayMinusPrune = $startTime - (60 * 60 * 24 * $config->pruneAfter);
+    $todayMinus1     = $startTime - (60 * 60 * 24 * 1);
+    for ($i = 0; $i < count($logFiles); $i++) {
+        $f = $logFiles[$i];
+        if ($f === "") {
+            break;
+        }
+
+        $stat  = stat($f);
+        $mTime = $stat[9];
+        if ($mTime < $todayMinusPrune) {
+            // log file is older than 7 days; delete
+            outlog("\tPruning {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+            unlink($f);
+        } else if ($config->compressLogs && !preg_match("/.*\.gz$/", $f) && $mTime < $todayMinus1) {
+            // log file is older than 1 day; compress
+            outlog("\tCompressing {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+            $out = `gzip $f`;
+        }
+    }
+    outlog("\n");
+
+    /*********************************************************************/
+    /************************* Initialization ****************************/
+    /*********************************************************************/
+
+    // base cmdb query
+    #$baseQuery = "^sys_class_name!=cmdb_ci_network_adapter^sys_class_name!=u_subsystem";
+    $baseQuery = "^sys_class_name=cmdb_ci_server^ORsys_class_name=cmdb_ci_msd^ORsys_class_name=u_san_switches_storage^ORsys_class_name=cmdb_ci_netgear";
+
+    // init summary stats
+    $summary = (object)array(
+        "numAcdcAssets"    => 0,
+        "numFound"         => 0,
+        "numNotFound"      => 0,
+        "numMultiple"      => 0,
+        "numSNMismatch"    => 0
+    );
+
+    // instantiate the needed data access objects
+    $assetTable    = new AssetTable();
+    $assetExceptionTable = new AssetExceptionTable();
+    $bsTable = new BusinessServiceTable();
+    $ssTable = new SubsystemTable();
+
+    $cmdbCiTable            = new CMDBCITable();
+    $cmdbServerTable        = new CMDBServerTable();
+    $cmdbStorageTable       = new CMDBStorageDeviceTable();
+    $cmdbSanSwitchTable     = new CMDBSanSwitchTable();
+    $cmdbNetworkDeviceTable = new CMDBNetworkDeviceTable();
+
+    /*********************************************************************/
+    /**************************** Main ***********************************/
+    /*********************************************************************/
+
+    // get a list of all exceptions so that we can keep track and delete ones that are no longer valid
+    $exceptionsHash = $assetExceptionTable->getAllHashByAssetId();
+
+    // get a list of hosts from the ACDC  database
+    outlog("Getting a list of ACDC assets...\n");
+    #$assets = $assetTable->getAllNoSysId("label");
+    $assets = $assetTable->getAll("label");
+    $numAcdcAssets = count($assets);
+    $summary->numAcdcAssets = $numAcdcAssets;
+    outlog("\nTotal ACDC Assets: " . $numAcdcAssets . "\n\n");
+
+    // loop thru each asset
+    $i = 0;
+    foreach ($assets as $asset) {
+        $i++;
+
+        if ($options->targetHost && $asset->getLabel() != $options->targetHost) {
+            continue;
+        } else if ($options->lineNumber && $i < $options->lineNumber) {
+            continue;
+        }
+
+        outlog(sprintf("[%4d of %4d] %-30s", $i, $numAcdcAssets, $asset->getLabel()));
+
+        $ci = new CMDBCI();
+
+        // Search by Name and Serial Number
+        $query   = "nameSTARTSWITH" . $asset->getLabel() . "." . "^serial_number=" . $asset->getSerialNumber() . $baseQuery;
+        $results = array();
+        if ($asset->getSerialNumber()) {
+            outlog(sprintf("%-12s", "(HN and SN)"));
+            $results = $cmdbCiTable->getByQueryString($query);
+        } else {
+            outlog(sprintf("%-12s", "(-)"));
+        }
+
+        if (count($results) > 1) {
+            $summary->numMultiple++;
+            outlog("Multiple matches\n");
+
+            // create/update the exception
+            $exc = new AssetException();
+            $exc->setAssetId($asset->getId())
+                ->setExceptionType(AssetExceptionTable::MULTIPLEMATCHES);
+            $detailStr = "";
+            foreach ($results as $r) {
+                $detailStr .= "Name: " . $r->getName() . ", SN: " . $r->getSerialNumber() . ", Man: " . $r->getManufacturer() . ", Model: " . $r->getModelNumber() . "\n";
+            }
+            $exc->setExceptionDetails($detailStr);
+            if ($options->update) $exc = $assetExceptionTable->save($exc);
+            if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+            continue;
+        } else if (count($results) == 1) {
+            $summary->numFound++;
+            $ci = $results[0];
+            $asset->setFoundBy("HN and SN");
+            outlog(sprintf("%10s", ""));
+        } else {
+            // search by serial number
+            $query   = "serial_number=" . $asset->getSerialNumber() . $baseQuery;
+            $results = array();
+            if ($asset->getSerialNumber()) {
+                outlog(sprintf("%-5s", "(SN)"));
+                $results = $cmdbCiTable->getByQueryString($query);
+            } else {
+                outlog(sprintf("%-5s", "(-)"));
+            }
+            if (count($results) > 1) {
+                $summary->numMultiple++;
+                outlog(sprintf("%-4s %s\n", "", "Multiple matches"));
+
+                // create/update the exception
+                $exc = new AssetException();
+                $exc->setAssetId($asset->getId())
+                    ->setExceptionType(AssetExceptionTable::MULTIPLEMATCHES);
+                $detailStr = "";
+                foreach ($results as $r) {
+                    $detailStr .= "Name: " . $r->getName() . ", SN: " . $r->getSerialNumber() . ", Man: " . $r->getManufacturer() . ", Model: " . $r->getModelNumber() . "\n";
+                }
+                $exc->setExceptionDetails($detailStr);
+                if ($options->update) $exc = $assetExceptionTable->save($exc);
+                if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+                continue;
+            } else if (count($results) == 1) {
+                $summary->numFound++;
+                $ci = $results[0];
+                $asset->setFoundBy("SN");
+                outlog(sprintf("%5s", ""));
+            } else {
+                // search by host name
+                outlog(sprintf("%-5s", "(HN)"));
+                $query   = "nameSTARTSWITH" . $asset->getLabel() . "." . $baseQuery;
+                $results = $cmdbCiTable->getByQueryString($query);
+                if (count($results) > 1) {
+                    $summary->numMultiple++;
+                    outlog("Multiple matches\n");
+
+                    // create/update the exception
+                    $exc = new AssetException();
+                    $exc->setAssetId($asset->getId())
+                        ->setExceptionType(AssetExceptionTable::MULTIPLEMATCHES);
+                    $detailStr = "";
+                    foreach ($results as $r) {
+                        $detailStr .= "Name: " . $r->getName() . ", SN: " . $r->getSerialNumber() . ", Man: " . $r->getManufacturer() . ", Model: " . $r->getModelNumber() . "\n";
+                    }
+                    $exc->setExceptionDetails($detailStr);
+                    if ($options->update) $exc = $assetExceptionTable->save($exc);
+                    if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+                    continue;
+                } else if (count($results) == 0) {
+                    $query   = "name=" . $asset->getLabel() . $baseQuery;
+                    $results = $cmdbCiTable->getByQueryString($query);
+                }
+
+                if (count($results) > 1) {
+                    $summary->numMultiple++;
+                    outlog("Multiple matches\n");
+
+                    // create/update the exception
+                    $exc = new AssetException();
+                    $exc->setAssetId($asset->getId())
+                        ->setExceptionType(AssetExceptionTable::MULTIPLEMATCHES);
+                    $detailStr = "";
+                    foreach ($results as $r) {
+                        $detailStr .= "Name: " . $r->getName() . ", SN: " . $r->getSerialNumber() . ", Man: " . $r->getManufacturer() . ", Model: " . $r->getModelNumber() . "\n";
+                    }
+                    $exc->setExceptionDetails($detailStr);
+                    if ($options->update) $exc = $assetExceptionTable->save($exc);
+                    if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+                    continue;
+                }
+                else if (count($results) == 1) {
+                    /** @var CMDBCI $ci */
+                    $ci = $results[0];
+
+                    if (preg_match("/[a-z]/", $ci->getSerialNumber())) {
+                        // convert to upper case if necessary
+                        $ci->setSerialNumber(strtoupper($ci->getSerialNumber()));
+                        if ($options->update) $ci = updateSerialNumber($cmdbCiTable, $ci);
+                    } else if (preg_match("/^\s+/", $ci->getSerialNumber()) || preg_match("/\s+$/", $ci->getSerialNumber())) {
+                        // remove leading spaces if necessary
+                        $ci->setSerialNumber(trim($ci->getSerialNumber()));
+                        if ($options->update) $ci = updateSerialNumber($cmdbCiTable, $ci);
+                    }
+
+                    if ($ci->getSerialNumber() == "" && $asset->getSerialNumber())
+                    {
+                        outlog("Update CMDB SN from '" . $ci->getSerialNumber() . "' to '" . $asset->getSerialNumber() . "' ");
+                        $ci->setSerialNumber($asset->getSerialNumber());
+                        if ($options->update) $ci = $cmdbCiTable->update($ci);
+                    }
+                    else if (($ci->getSerialNumber() && !$asset->getSerialNumber()) || (preg_replace("/-/", "", $ci->getSerialNumber()) == $asset->getSerialNumber()))
+                    {
+                        $asset->setSerialNumber(strtoupper($ci->getSerialNumber()));
+                    }
+                    else if ($ci->getSerialNumber() != $asset->getSerialNumber())
+                    {
+                        outlog("Serial number mismatch - CMDB: " . $ci->getSerialNumber() . " != ACDC: " . $asset->getSerialNumber() . "\n");
+                        $summary->numSNMismatch++;
+
+                        // create/update the exception
+                        $exc = new AssetException();
+                        $exc->setAssetId($asset->getId())
+                            ->setExceptionType(AssetExceptionTable::SNMISMISMATCH)
+                            ->setExceptionDetails("CMDB: " . $ci->getSerialNumber() . " != ACDC: " . $asset->getSerialNumber());
+                        if ($options->update) $exc = $assetExceptionTable->save($exc);
+                        if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+                        continue;
+                    }
+                    else
+                    {
+                        // both CMDB and ACDC SNs are blank. copy the CMDB name to ACDC name
+                        $asset->setName($ci->getName());
+                    }
+                    $summary->numFound++;
+                    $asset->setFoundBy("HN");
+                } else {
+                    $summary->numNotFound++;
+                    outlog("Not found\n");
+
+                    // create/update the exception
+                    $exc = new AssetException();
+                    $exc->setAssetId($asset->getId())
+                        ->setExceptionType(AssetExceptionTable::NOTFOUND);
+                    if ($options->update) $exc = $assetExceptionTable->save($exc);
+                    if (array_key_exists($asset->getId(), $exceptionsHash)) unset($exceptionsHash[$asset->getId()]);
+                    continue;
+                }
+            }
+        }
+
+        // clear out any existing exceptions if they exist for this asset
+        $e = $assetExceptionTable->getByAssetId($asset->getId());
+        if ($e->getId()) $assetExceptionTable->delete($e);
+
+        // get the CMDB CI from the appropriate table
+        $cmdbTable = getCmdbTable($ci->getSysClassName());
+        $ci = $cmdbTable->getBySysId($ci->getSysId());
+
+        // Be sure we have the BS and Subsystem in our local db
+        $ar = explode(',', $ci->getBusinessServicesIds());
+        if (strlen($ar[0]) == 32) {
+            $bsSysId = $ar[0];
+            $bs = $bsTable->getBySysId($bsSysId);
+            if (!$bs->getSysId()) {
+                $bs->setSysId($bsSysId);
+                $ar = explode(',', $ci->getBusinessServices());
+                $bs->setName($ar[0]);
+                $bs = $bsTable->create($bs);
+            }
+        } else {
+            $bs = new BusinessService();
+        }
+
+        $ar = explode(',', $ci->getSubsystemListId());
+        if (strlen($ar[0]) == 32) {
+            $ssSysId = $ar[0];
+            $ss = $ssTable->getBySysId($ssSysId);
+            if (!$ss->getSysId()) {
+                $ss->setSysId($ssSysId);
+                $ar = explode(',', $ci->getSubsystemList());
+                $ss->setName($ar[0]);
+                $ss = $ssTable->create($ss);
+            }
+        } else {
+            $ss = new Subsystem();
+        }
+
+        $asset
+            ->setSysId($ci->getSysId())
+            ->setSysClassName($ci->getSysClassName())
+            ->setAssetClass(getAssetClass($ci->getSysClassName()))
+            ->setDeviceType($ci->getSysClassName() == "cmdb_ci_server" ? $ci->getHostType() : $ci->getDeviceType())
+            ->setName(strtolower($ci->getName()))
+            ->setManufacturer($ci->getManufacturer())
+            ->setInstallStatus($ci->getInstallStatus())
+            ->setBusinessServiceSysId($bs->getSysId())
+            ->setSubsystemSysId($ss->getSysId())
+        ;
+
+        outlog("Update ACDC");
+        if ($options->update) {
+            $asset = $assetTable->update($asset);
+        }
+        outlog("\n");
+    }
+
+    // remove any remaining exceptions since they are no longer valid
+    foreach (array_keys($exceptionsHash) as $assetId) {
+        /** @var AssetException $e */
+        $e = $exceptionsHash[$assetId];
+        $assetExceptionTable->delete($e);
+    }
+
+    // save the date and time of this run
+    $jrtTable = new JobRunTimeTable();
+    $jrt = new JobRunTime();
+    $jrt->setJobName($title)
+        ->setRunTime(date('Y-m-d h:i:s'));
+    $jrt = $jrtTable->save($jrt);
+
+    // write the summary to the end of the log file and close it
+    outlog(generateSummary());
+    fclose($logFilePtr);
+}
+
+catch (\Exception $e) {
+    global $options, $logString, $config, $title;
+
+    $emailTo   = $config->adminEmail;
+    $emailFrom = $config->adminEmail;
+    $emailSubj = "ACDC: {$title} Error Report";
+
+    $headers = implode("\r\n", array(
+        "MIME-Version: 1.0",
+        "Content-type: text/html; charset=us-ascii",
+        "From: {$emailFrom}",
+        "Reply-To: {$emailFrom}",
+        "X-Priority: 1",
+        "X-MSMail-Priority: High",
+        "X-Mailer: PHP/" . phpversion()
+    ));
+
+    $traceBack = "returnCode: 1\n" .
+        "errorCode:  {$e->getCode()}\n" .
+        "errorText:  {$e->getMessage()}\n" .
+        "errorFile:  {$e->getFile()}\n" .
+        "errorLine:  {$e->getLine()}\n" .
+        "errorStack: {$e->getTraceAsString()}\n";
+
+    outlog("{$traceBack}\n");
+
+    if (isset($summary)) {
+        outlog(generateSummary());
+    }
+
+    if (!$options->stdOut) {
+        $emailBody = "<pre style='font-size:6pt;'>\n" .
+            "{$logString}\n" .
+            "</pre>\n";
+        mail($emailTo, $emailSubj, $emailBody, $headers);
+    }
+    exit;
+}
+
+function updateSerialNumber(CMDBCITable $ciTable, CMDBCI $a)
+{
+    $sn = $a->getSerialNumber();
+
+    $a->setSerialNumber("xxxACDCxxx");
+    $a = $ciTable->update($a);
+
+    $a->setSerialNumber(strtoupper($sn));
+    $a = $ciTable->update($a);
+    return $a;
+}
+
+
+/**
+ * @param $sysClassName
+ * @return CMDBNetworkDeviceTable|CMDBSANSwitchTable|CMDBServerTable|CMDBStorageDeviceTable
+ * @throws ErrorException
+ */
+function getCmdbTable($sysClassName)
+{
+    switch ($sysClassName) {
+        case 'cmdb_ci_server':
+            /** @var CMDBServerTable $table */
+            $table = new CMDBServerTable();
+            return $table;
+            break;
+        case 'cmdb_ci_msd':
+            /** @var CMDBStorageDeviceTable $table */
+            $table = new CMDBStorageDeviceTable();
+            return $table;
+            break;
+        case 'u_san_switches_storage':
+            /** @var CMDBSANSwitchTable $table */
+            $table = new CMDBSANSwitchTable();
+            return $table;
+            break;
+        case 'cmdb_ci_netgear':
+            /** @var CMDBNetworkDeviceTable $table */
+            $table = new CMDBNetworkDeviceTable();
+            return $table;
+            break;
+        default:
+            throw new ErrorException('Unknown sys_class_name: ' . $sysClassName);
+    }
+}
+
+/**
+ * @param $sysClassName
+ * @return string
+ * @throws ErrorException
+ */
+function getAssetClass($sysClassName)
+{
+    switch ($sysClassName) {
+        case 'cmdb_ci_server':
+            return 'Host';
+            break;
+        case 'cmdb_ci_msd':
+            return 'Storage';
+            break;
+        case 'u_san_switches_storage':
+            return 'SAN Switch';
+            break;
+        case 'cmdb_ci_netgear':
+            return 'Network Gear';
+            break;
+        default:
+            throw new ErrorException('Unknown assetClass: ' . $sysClassName);
+    }
+}
+
+function parseOptions()
+{
+    // command line opts
+    $opts = getopt('husrt:c:w:n:');
+
+    // usage if -h
+    if ($opts && array_key_exists('h', $opts)) {
+        usage();
+    }
+
+    // define options
+    $options = (object)array(
+        "stdOut"       => array_key_exists('s', $opts) ? true : false,
+        "update"       => array_key_exists('u', $opts) ? false : true,
+        "forceRun"     => array_key_exists('r', $opts) ? true : false,
+        "targetHost"   => array_key_exists('t', $opts) ? strtolower($opts['t']) : false,
+        "cabinetName"  => array_key_exists('c', $opts) ? $opts['c'] : false,
+        "locationName" => array_key_exists('w', $opts) ? $opts['w'] : false,
+        "lineNumber"   => array_key_exists('n', $opts) ? $opts['n'] : false
+    );
+
+    return $options;
+}
+
+function usage()
+{
+    print "Usage: acdc_to_cmdb_lookup [-hsur][-t target_host][-n line_number]\n";
+    print "\n";
+    print "       -h           this help\n";
+    print "       -u           no updates, just show actions\n";
+    print "       -s           outlog to STDOUT in real time\n";
+    print "       -r           force run even if runCronJobs is false\n";
+    print "       -t host      target host; only run against this host\n";
+    print "       -n lineNum   start at line number lineNum\n";
+    exit;
+}
+
+function generateSummary()
+{
+    global $startTime, $summary, $summaryNameWidth;
+
+    // calc elapsed time
+    $endTime       = time();
+    $elapsedSecs   = $endTime - $startTime;
+    $elapsedFormat = sprintf("%02d:%02d", floor($elapsedSecs / 60), $elapsedSecs % 60);
+
+    return sprintf("\n\nSummary\n%'-60s\n", "") .
+
+    sumOutput("ACDC Hosts", $summary->numAcdcAssets) .
+
+    sumOutput("CMDB Found", $summary->numFound, $summary->numAcdcAssets) .
+    sumOutput("CMDB SN Mismatch", $summary->numSNMismatch, $summary->numAcdcAssets) .
+    sumOutput("CMDB Multiple", $summary->numMultiple, $summary->numAcdcAssets) .
+    sumOutput("CMDB Not Found", $summary->numNotFound, $summary->numAcdcAssets) .
+    "\n" .
+    sprintf("%-{$summaryNameWidth}s: %s\n", "Start Time", date("Y-m-d H:i:s", $startTime)) .
+    sprintf("%-{$summaryNameWidth}s: %s\n", "End Time", date("Y-m-d H:i:s", $endTime)) .
+    sprintf("%-{$summaryNameWidth}s: %s\n", "Elapsed Time", $elapsedFormat) .
+    "Synchronization Complete\n";
+}
+
+function sumOutput($title, $count, $total = null)
+{
+    global $summaryNameWidth;
+
+    if ($total) {
+        return sprintf("%-{$summaryNameWidth}s: %5d (%4.1f%%)\n", $title, $count, round($count / $total * 100, 1));
+    } else {
+        return sprintf("%-{$summaryNameWidth}s: %5d\n", $title, $count);
+    }
+}
+
+function outlog($logMsg)
+{
+    global $options, $logFilePtr, $logString;
+
+    if ($options->stdOut) {
+        print $logMsg;
+    }
+    fwrite($logFilePtr, $logMsg);
+    $logString .= $logMsg;
+}
+
+/** @var $e Exception */
+function printException($e)
+{
+    outlog("\n");
+    outlog(sprintf("%-12s => %s\n", "returnCode", 1));
+    outlog(sprintf("%-12s => %s\n", "errorCode", $e->getCode()));
+    outlog(sprintf("%-12s => %s\n", "errorText", $e->getMessage()));
+    outlog(sprintf("%-12s => %s\n", "errorFile", $e->getFile()));
+    outlog(sprintf("%-12s => %s\n", "errorLine", $e->getLine()));
+    outlog(sprintf("%-12s => \n%s\n", "errorStack", $e->getTraceAsString()));
+    exit;
+}
+
+?>

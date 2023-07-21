@@ -1,0 +1,1088 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: acdc_cmdb_sync 77193 2013-07-26 17:40:04Z rcallaha $
+ * $Date: 2013-07-26 13:40:04 -0400 (Fri, 26 Jul 2013) $
+ * $Author: rcallaha $
+ * $Revision: 77193 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/acdc_cmdb_sync $
+ *
+ * Description:
+ * This cron job will run once per day and perform the following functions:
+ * - ACDC -> CDMB pass
+ *   - Loop over all ACDC assets in the local MySQL database
+ *   - Look them up in CMDB by sysId, name., name, serial number and asset tag
+ *   - Convert name to lowercase if necessary (side bonus here)
+ *   - Generate exception reports for all assets and racks not found.
+ *   - If the asset is found and and fields are empty it will update the values with what's in ACDC
+ *   - If the CMDB value is not empty and differs from ACDC, the CMDB value will be updated in ACDC
+ * 
+ * - CMDB -> ACDC pass
+ *   - Perform a query against CMDB obtaining all server, network and SAN assets
+ *   - Compare this list against the local MySQL database and if assets are missing, 
+ *     they will be inserted locally and an exception generated
+ *
+ * - NOTE: the only locations currently supported are Sterling, Charlotte CLT-1
+ *         and Charlotte CLT-3
+ *******************************************************************************
+ */
+
+chdir(__DIR__);
+
+include __DIR__ . "/../config/global.php";
+
+use STS\CMDB\CMDBCI;
+use STS\CMDB\CMDBCITable;
+
+use STS\CMDB\CMDBRackTable;
+use STS\CMDB\CMDBLocationTable;
+
+use STS\CMDB\CMDBServerTable;
+use STS\CMDB\CMDBStorageDeviceTable;
+use STS\CMDB\CMDBSANSwitchTable;
+use STS\CMDB\CMDBNetworkDeviceTable;
+
+use STS\HPSIM\HPSIMChassisTable;
+use STS\HPSIM\HPSIMBladeTable;
+
+use STS\Util\SysLog;
+
+try {
+	// read the config file
+	$config = $GLOBALS['config'];
+
+	// get the command line options
+	$options = parseOptions();
+
+	// initialize syslog
+	$sysLog = new SysLog($config->appName);
+	$sysLog->setLogLevel(STS\Util\SysLog::DEBUG);
+
+	// check to see if we should run
+	if (!$config->runCronJobs && !$options->forceRun) {
+		print "runCronJobs is set to false in the config file. Exiting...\n";
+		exit;
+	}
+
+	/*********************************************************************/
+	/******************** Log Files & Headers ****************************/
+	/*********************************************************************/
+
+	// general definitions
+	$title      = "ACDC: ACDC to CMDB Sync ";
+	$scriptName = $argv[0];
+	$now        = date("Y-m-d-H-i");
+	$startTime  = time();
+
+	$optsNameWidth    = 25;
+	$summaryNameWidth = 30;
+
+	// open the log file; also keep a log string to send in email if exception is thrown
+	$logString  = "";
+	$logFile    = "{$config->logDir}/{$config->acdcCmdbSyncLogFileName}.{$now}";
+	$logFilePtr = fopen($logFile, "w");
+
+	$release = trim(file_get_contents("../ABOUT"));
+
+	$logHeader = "{$title} Log\n" .
+		"\n" .
+		"Release:    {$release}\n" .
+		"Host:       " . gethostname() . "\n" .
+		"SN Site:    {$config->servicenow->site}\n" .
+		"Script:     " . implode(' ', $argv) . "\n" .
+		"Start Time: " . date("Y-m-d H:i:s", $startTime) . "\n" .
+		"\n" .
+		"Options: \n" .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "StdOut",            $options->stdOut       ? "true" : "false") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Update",            $options->update       ? "true" : "false") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Force Run",         $options->forceRun     ? "true" : "false") .
+        sprintf("\t %-{$optsNameWidth}s = %s\n", "Update Override",   $options->override     ? $options->override  : "N/A; using default of 'acdc'") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Target Host",       $options->targetHost   ? $options->targetHost  : "N/A") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number",       $options->lineNumber   ? $options->lineNumber  : "N/A") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Line Number Start", $options->lineNumStart ? $options->lineNumStart  : "N/A") .
+		"\n";
+	outlog($logHeader);
+
+
+	// prune old log files
+	outlog("Cleaning up old log files...\n");
+	$logFiles        = explode("\n", `ls -t $config->logDir/$config->acdcCmdbSyncLogFileName.*`);
+	$todayMinusPrune = $startTime - (60 * 60 * 24 * $config->pruneAfter);
+	$todayMinus1     = $startTime - (60 * 60 * 24 * 1);
+	for ($i = 0; $i < count($logFiles); $i++) {
+		$f = $logFiles[$i];
+		if ($f === "") {
+			break;
+		}
+
+		$stat  = stat($f);
+		$mTime = $stat[9];
+		if ($mTime < $todayMinusPrune) {
+			// log file is older than 7 days; delete
+			outlog("\tPruning {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+			unlink($f);
+		}
+		else if ($config->compressLogs && !preg_match("/.*\.gz$/", $f) && $mTime < $todayMinus1) {
+			// log file is older than 1 day; compress
+			outlog("\tCompressing {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+			$out = `gzip $f`;
+		}
+	}
+	outlog("\n");
+
+	/*********************************************************************/
+	/************************* Initialization ****************************/
+	/*********************************************************************/
+
+    // we're not going to copy CMDB data to ACDC just yet, so we'll use a flag to indicate this
+    $copyCmdbToDci = false;
+
+	// base cmdb query ensures that we don't match a network adaptor or subsystem
+	$baseQuery = "^sys_class_name!=cmdb_ci_network_adapter" .
+ 		         "^sys_class_name!=u_subsystem";
+
+	// hashes of items not found
+    $assetsNF       = array();
+    $locationsNF    = array();
+    $racksNF        = array();
+    $assetsDecommed = array();
+
+    $acdcMissingLoc  = array();
+    $acdcMissingRack = array();
+    $acdcMissingElev = array();
+    $acdcMissingRUs  = array();
+
+    // init summary stats
+	$summary = (object) array(
+		"numAssets"         => 0, // total number of ACDC non-decommissioned assets
+		"missingLoc"        => 0, // number of ACDC assets that are missing a location
+        "missingRack"       => 0, // number of ACDC assets that are missing a rack
+        "missingElev"       => 0, // number of ACDC assets that are missing a rack elevation
+        "missingRUs"        => 0, // number of ACDC assets that are missing the number or RUs
+
+		"numFound"          => 0, // number of ACDC asset found in CMDB
+		"numNotFound"       => 0, // number of ACDC assets not found in CMDB
+		"numMultiple"       => 0, // number of ACDC assets returning multiple matches in CMDB
+		"numCaseChange"     => 0, // number of CMDB asset names changed from upper to lowercase
+		#"locNotFound"       => 0, // Since we're only using Sterling and Charlotte, this will never increment
+		"rackNotFound"      => 0, // number of ACDC assets where their rack was not found in CMDB
+
+		"acdcLocUpdated"     => 0, // number of ACDC assets that had their location updated from CMDB
+        "acdcLocCreated"     => 0, // number of ACDC location created
+		"acdcRackUpdated"    => 0, // number of ACDC assets that had their rack was updated from CMDB
+        "acdcRackCreated"    => 0, // number of ACDC racks created
+		"acdcElevUpdated"    => 0, // number of ACDC assets that had their elevation updated from CMDB
+		"acdcRUsUpdated"     => 0, // number of ACDC assets that had their RUs updated from CMDB
+		"acdcRacksCreated"   => 0, // number of racks created in ACDC from CMDB
+
+		"cmdbLocUpdated"    => 0, // number of CMDB assets that had their location updated from ACDC
+		"cmdbRackUpdated"   => 0, // number of CMDB assets that had their rack updated from ACDC
+		"cmdbElevUpdated"   => 0, // number of CMDB assets that had their elevation updated from ACDC
+		"cmdbRUsUpdated"    => 0, // number of CMDB assets that had their RUs updated from ACDC
+        "cmdbBladesUpdated" => 0  // number of CMDB blades updated with their chassis info (location, rack & elevation)
+	);
+
+	// instantiate the needed data access objects
+	$assetTable             = new AssetTable();
+	$cabinetTable           = new CabinetTable();
+	$locationTable          = new LocationTable();
+
+	$cmdbLocationTable      = new CMDBLocationTable();
+	$cmdbRackTable          = new CMDBRackTable();
+
+	$cmdbCITable            = new CMDBCITable();
+	$cmdbServerTable        = new CMDBServerTable();
+	$cmdbStorageTable       = new CMDBStorageDeviceTable();
+	$cmdbSanSwitchTable     = new CMDBSanSwitchTable();
+	$cmdbNetworkDeviceTable = new CMDBNetworkDeviceTable();
+
+    $hpsimChassisTable      = new HPSIMChassisTable();
+    $hpsimBladeTable        = new HPSIMBladeTable();
+
+    // get the 3 locations that we're currently supporting
+    $locSterling = $cmdbLocationTable->getByName('Sterling-VA-NSR-B8');
+    $locCharlotteCLT1 = $cmdbLocationTable->getByName('Charlotte-NC-CLT-1');
+    $locCharlotteCLT3 = $cmdbLocationTable->getByName('Charlotte-NC-CLT-3');
+    $locAshburn = $cmdbLocationTable->getByName('Ashburn-VA-EQIX-DC2');
+
+	/*********************************************************************/
+	/**************************** Main ***********************************/
+	/*********************************************************************/
+
+    // get a list of hosts from the local ACDC database
+    outlog("Getting a list of ACDC assets...\n");
+    $assets = $assetTable->getAll();
+    #$assets = $assetTable->getAllByLocationId(14);
+	$numAssets = count($assets);
+	$summary->numAssets = $numAssets;
+	outlog("\nTotal ACDC Assets: " . $numAssets . "\n\n");
+
+    // open the file that logs multiple matches found in CMDB
+    $fdMultiple = fopen($config->logDir . "/" . $config->multipleMatchesFileName . "." . $now, "w");
+   	fwrite($fdMultiple, sprintf("%-20s %-20s %-20s %-20s %-20s %-10s\n", "Hostname", "Serial Num", "Asset Num", "Model", "Location", "Rack"));
+
+	// loop thru each
+	$iter = new ArrayIterator($assets);
+	foreach ($iter as $i => $asset) {
+		/** @var Asset $asset */
+
+	    if ($options->targetHost && $asset->getLabel() != $options->targetHost) continue;
+	    if ($options->lineNumber && $i + 1 != $options->lineNumber) continue;
+	    if ($options->lineNumStart && $i + 1 < $options->lineNumStart) continue;
+
+        if (!$asset->getCabinetId()) {
+            continue;
+        }
+		$cabinet = $cabinetTable->getById($asset->getCabinetId());
+		$location = $locationTable->getById($cabinet->getLocationId());
+
+		// initialize changes array for call to CMDB update
+		$changes  = array();
+
+		outlog(sprintf("[%4d of %4d] %-40s", $i + 1, $numAssets, $asset->getLabel()));
+
+		$ci      = new CMDBCI();
+		$foundBy = "";
+
+		// If we have a sysId for this asset, it's an easy lookup
+		if ($asset->getSysId()) {
+		    $ci = $cmdbCITable->getBySysId($asset->getSysId());
+		    $foundBy = "SYSID";
+		}
+
+        // no sysId, we'll need to use the name or serial number to look it up in CMDB
+        else {
+            // first query: NAMELIKE<name>.  (include dot at the end)
+            // outlog("search " . $asset->getLabel() . ".*\n");
+            $query   = "nameSTARTSWITH" . rawurlencode($asset->getLabel()) . "." . $baseQuery;
+            $results = $cmdbCITable->getByQueryString($query);
+
+            // if we got one return value, we're good
+            if (count($results) == 1) {
+                $ci      = $results[0];
+                $foundBy = "HN";
+            }
+
+            // more than one record returned, check to see if any are decommed. If so, remove that record from results
+            else if (count($results) > 1) {
+                for ($j=0; $j<count($results); $j++) {
+                    $ci = $results[$j];
+                    if ($ci->getInstallStatus() == "Decommissioned") {
+                        array_splice($results, $j, 1);
+                        $j--;
+                    }
+                }
+                // decomms removed, check the length again
+                if (count($results) > 1) {
+                    // still multiple entries, write out an exception and go to next asset
+                    // outlog("     MULTIPLE ENTRIES\n");
+                    $summary->numMultiple++;
+                    fwrite($fdMultiple, sprintf("%-40s %-20s %-20s %-20s %-20s %-10s\n", $asset->getName(), $asset->getSerialNumber(), $asset->getSerialNumber(),
+                        $asset->getModel(), $location->getName(), $cabinet->getName()));
+                    $ci->setSysId("");
+                    //continue;
+                } else  {
+                    $foundBy = "HN";
+                    $ci = $results[0];
+                }
+            }
+
+            // if not found try second query: NAMELIKE=<name> (no dot at the end)
+            if ($ci->getSysId() == "") {
+                // outlog("search " . $asset->getLabel() . "*\n");
+                $query   = "nameSTARTSWITH" . rawurlencode($asset->getLabel()) . $baseQuery;
+                $results = $cmdbCITable->getByQueryString($query);
+                // one match? we got it
+                if (count($results) == 1) {
+                    $ci      = $results[0];
+                    $foundBy = "HN";
+                }
+                // multiple matches, remove decommed assets
+                else if (count($results) > 1) {
+                    for ($j=0; $j<count($results); $j++) {
+                        $ci = $results[$j];
+                        if ($ci->getInstallStatus() == "Decommissioned") {
+                            unset($results[$j]);
+                            $results = array_splice($results, $j, 1);
+                            $j--;
+                        }
+                    }
+                    if (count($results) > 1) {
+                        // outlog("     MULTIPLE ENTRIES\n");
+                        $summary->numMultiple++;
+                        fwrite($fdMultiple, sprintf("%-20s %-20s %-20s %-20s %-20s %-10s\n", $asset->getName(), $asset->getSerialNumber(), $asset->getSerialNumber(),
+                            $asset->getModel(), $location->getName(), $cabinet->getName()));
+                        $ci->setSysId("");
+                        //continue;
+                    } else {
+                        $foundBy = "HN";
+                        $ci = $results[0];
+                    }
+                }
+            }
+
+            // if still not found and we have a serial number for this asset, try looking up by serial number
+            if ($ci->getSysId() == "" && $asset->getSerialNumber() != "") {
+                // outlog("search " . $asset->getSerialNumber() . "\n");
+                $query   = "serial_number=" . $asset->getSerialNumber() . $baseQuery;
+                $results = $cmdbCITable->getByQueryString($query);
+
+                // again check for multiple matches and decomms
+                if (count($results) == 1) {
+                    $ci = $results[0];
+                    $foundBy = "SN";
+                } else if (count($results) > 1) {
+                    for ($j=0; $j<count($results); $j++) {
+                        $ci = $results[$j];
+                        if ($ci->getInstallStatus() == "Decommissioned") {
+                            unset($results[$j]);
+                            $results = array_splice($results, $j, 1);
+                            $j--;
+                        }
+                    }
+                    if (count($results) > 1) {
+                        outlog("     MULTIPLE ENTRIES\n");
+                        $summary->numMultiple++;
+                        fwrite($fdMultiple, sprintf("%-20s %-20s %-20s %-20s %-20s %-10s\n", $asset->getName(), $asset->getSerialNumber(), $asset->getSerialNumber(),
+                            $asset->getModel(), $location->getName(), $cabinet->getName()));
+                        continue;
+                    }
+                    $foundBy = "SN";
+                    $ci = $results[0];
+                }
+            }
+
+            // Finally, if we have an asset number, use that for lookup
+            /*
+            if ($ci->getSysId() == "" && $asset->getAssetTag() != "") {
+                $query   = "u_asset_id=" . rawurlencode($asset->getAssetTag()) . $baseQuery;
+                $results = $cmdbCITable->getByQueryString($query);
+                if (count($results) == 1) {
+                    $ci = $results[0];
+                    $foundBy = "AN";
+                } else if (count($results) > 1) {
+                    for ($j=0; $j<count($results); $j++) {
+                        $ci = $results[$j];
+                        if ($ci->getInstallStatus() == "Decommissioned") {
+                            unset($results[$j]);
+                            $results = array_splice($results, $j, 1);
+                            $j--;
+                        }
+                    }
+                    if (count($results) > 1) {
+                        outlog("     MULTIPLE ENTRIES\n");
+                        $summary->numMultiple++;
+                        fwrite($fdMultiple, sprintf("%-20s %-20s %-20s %-20s %-20s %-10s\n", $asset->getName(), $asset->getSerialNumber(), $asset->getSerialNumber(),
+                            $asset->getModel(), $location->getName(), $cabinet->getName()));
+                        continue;
+                    }
+                    $foundBy = "AN";
+                    $ci = $results[0];
+                }
+            }
+            */
+        }
+
+        // all possible searches have been exhausted. If the asset was not found in the CMDB, we need to create an exception
+		if ($ci->getSysId() == "") {
+			$summary->numNotFound++;
+			outlog("     NOT FOUND\n");
+			$assetsNF[$asset->getName()] = $asset;
+            continue;
+		}
+
+        // Yay! We found our asset.
+		else {
+		    // if the CMDB asset is marked as Decommed, we need to flag and exception since it's not flagged as decommed in ACDC
+            if ($ci->getInstallStatus() == "Decommissioned") {
+                outlog(sprintf("(%2s) %-40s %-25s", $foundBy, $ci->getName() . "*D", $ci->getSysClassName()));
+                $assetsDecommed[$ci->getName()] = $ci;
+            } else {
+                outlog(sprintf("(%2s) %-40s %-25s", $foundBy, $ci->getName(), $ci->getSysClassName()));
+            }
+			$summary->numFound++;
+
+			// Determine the class so that we get define the model and perform an update later
+            try {
+                $cmdbTable = getCmdbTable($ci->getSysClassName());
+            } catch (ErrorException $e) {
+                outlog("SKIPPING UNKNOWN CLASS\n");
+                continue;
+            }
+			$cmdbCI = $cmdbTable->getBySysId($ci->getSysId());
+
+            // if CMDB name has any uppercase characters, change to lowercase and update
+            if (preg_match("/[A-Z]/", $cmdbCI->getName())) {
+                // due to the fact that ServiceNow is not case sensitive, we have to change to a temporary name first, then to lowercase
+                $upperCaseName = $cmdbCI->getName();
+
+                // temporary name using process id + the index to keep it unique just in case we run into issues and it's not changed back
+                $cmdbCI->setName('stsapp-temporary-' . (getmypid() + $i));
+    			if ($options->update) $cmdbCI = $cmdbTable->update($cmdbCI);
+
+                // change to lower case and update again
+    			$cmdbCI->setName(strtolower($upperCaseName));
+                outlog("[NAME TO UPPER]");
+    			if ($options->update) $cmdbCI = $cmdbTable->update($cmdbCI);
+    			$summary->numCaseChange++;
+    		} else {
+                outlog("               ");
+            }
+
+            // if name = asset tag and name ~= /^\d+$/ then make name = label
+            if ($cmdbCI->getName() == $cmdbCI->getAssetTag() && preg_match("/^\d+$/", $cmdbCI->getName())) {
+                $cmdbCI->setName($asset->getLabel());
+                if ($options->update) $cmdbCI = $cmdbTable->update($cmdbCI);
+                outlog("[NAME TO LABEL]");
+            }
+            outlog("\n");
+
+            // output the CMDB and ACDC location names
+			outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "LOCATION", "CMDB:", $cmdbCI->getLocation() ? $cmdbCI->getLocation() : "-", "ACDC:", $location->getName() ? $location->getName() : "-"));
+
+            // check the override option. By default, cmdb will update ACDC if CMDB data exists and doesn't match ACDC
+            // this is the same as setting override option to 'sn' (-o sn)
+            // if override is set to 'acdc' (-o acdc) then acdc will update CMDB when ACDC data exists and doesn't match CMDB
+
+            if ($options->override == "sn") {
+                // CMDB Override
+
+                // get the CMDB location entry
+                $cmdbLocation = $cmdbLocationTable->getBySysId($cmdbCI->getLocationId());
+
+                // if the CMDB location is not empty and doesn't match ACDC, then update ACDC (this is the default action)
+                if ($cmdbCI->getLocationId() != $location->getSysId()) {
+
+                    /* shouldn't need to do this since the mapping was done when imported from old ACDC
+                    // first, if location is Charlotte, change to Charlotte CLT-1
+                    if ($cmdbCI->getLocation() == 'Charlotte') {
+                        $cmdbCI->setLocationId($locCharlotteCLT1->getSysId());
+                        if ($options->update) $cmdbCI = $cmdbTable->update($cmdbCI);
+
+                        // since we've change the location, we need to also change the rack since it is tied to the location
+                        // get the rack for the current location using the rack's name, not sys id
+                        $cmdbRack = $cmdbRackTable->getMostRecentByNameAndLocationId($cmdbCI->getRack(), $cmdbCI->getLocationId());
+                        if ($cmdbRack->getSysId()) {
+                            $cmdbCI->setRackId($cmdbRack->getSysId());
+                            $cmdbTable->update($cmdbCI);
+                        }
+                    }
+                    */
+
+                    // check to see if we have this location in ACDC
+                    $location = $locationTable->getByName($cmdbCI->getLocation());
+                    if ($location->getId()) {
+                        // we have this location; update the info
+                        $location->setSysId($cmdbLocation->getSysId());
+                        $location->setName($cmdbLocation->geName());
+                        $location->setStreet($cmdbLocation->getStreet());
+                        $location->setCity($cmdbLocation->getCity());
+                        $location->setState($cmdbLocation->getState());
+                        $location->setZip($cmdbLocation->getZip());
+
+                        $locationTable->update($location);
+                        $summary->acdcLocUpdated++;
+                        outlog("[ACDC UPDATE]");
+                    } else {
+                        // we don't have this location so we'll have to create it
+                        $location = new Location();
+                        $location->setSysId($cmdbLocation->getSysId());
+                        $location->setName($cmdbLocation->geName());
+                        $location->setStreet($cmdbLocation->getStreet());
+                        $location->setCity($cmdbLocation->getCity());
+                        $location->setState($cmdbLocation->getState());
+                        $location->setZip($cmdbLocation->getZip());
+
+                        $location = $locationTable->create($location);
+                        $summary->acdcLocUCreated++;
+                        outlog("[ACDC CREATE]");
+                    }
+                } else {
+                    outlog("[ACDC NO CHG]");
+                }
+            }
+            // ACDC Override
+            else {
+                // if the ACDC location is not empty and doesn't match CMDB then update
+                if ($cmdbCI->getLocationId() != $location->getSysId()) {
+                    // get the cmdb location by sysid, if exists, or by name
+                    if ($location->getSysId()) {
+                        $cmdbLocation = $cmdbLocationTable->getBySysId($location->getSysId());
+                    } else {
+                        $cmdbLocation = $cmdbLocationTable->getByname($location->getName());
+                    }
+
+                    // if found then update
+                    if ($cmdbLocation->getSysId()) {
+                        $cmdbCI->setLocationId($cmdbLocation->getSysId());
+
+                        if ($options->update) $cmdbCI = $cmdbTable->update($cmdbCI);
+                        $summary->cmdbLocUpdated++;
+                        outlog("[CMDB UPDATE]");
+                    } else {
+                        outlog("[LOC NOT FND]");
+                    }
+                } else {
+                    outlog("[CMDB NO CHG]");
+                }
+            }
+			outlog("\n");
+
+
+            // output the CMDB and ACDC Cabinet names
+			outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "RACK", "CMDB:", $cmdbCI->getRack() ? $cmdbCI->getRack() : "-", "ACDC:", $cabinet->getName() ? $cabinet->getName() : "-"));
+
+            if ($options->override == "sn") {
+                // CMDB Override
+
+                // if the CMDB rack is not blank and is different from ACDC, then update ACDC
+                if ($cmdbCI->getRackId() && $cmdbCI->getRackId() != $cabinet->getSysId()) {
+                    // we've already have the proper location in the $location class
+                    // see if we have a rack for this location
+                    $cabinet = $cabinetTable->getByNameAndLocationId($cmdbCI->getRack(), $location->getId());
+
+                    if ($cabinet->getId()) {
+                        // rack exists, so update
+                        $cabinet->setSysId($cmdbCI->getRackId());
+                        $cabinet->setName($cmdbCI->getRack());
+
+                        if ($options->update) $cmdbTable->update($cmdbCI);
+                        $summary->acdcRackUpdated++;
+                        outlog("[ACDC UPDATE]");
+                    } else {
+                        // cabinet doesn't exist so we have to create it
+                        $cabinet = new Cabinet();
+                        $cabinet->setLocationId($location->getId());
+                        $cabinet->setName($cmdbCI->getRack());
+                        $cabinet->setCabinetTypeId(1); // standard rack
+                        $cabinet->setSysId($cmdbCI->getRackId());
+                        $cabinet->setX(50); // location that'll be noticed; upper left corner
+                        $cabinet->setY(50);
+
+                        $cabinet = $cabinetTable->create($cabinet);
+                        $summary->acdcRackCreated++;
+                        outlog("[ACDC CREATE]");
+
+                        // update the asset
+                        $asset->setCabinetId($cabinet->getId());
+                        if ($options->update) $assetTable->update($asset);
+                    }
+                } else {
+                    outlog("[ACDC NO CHG]");
+                }
+            }
+
+            else {
+                // ACDC Override
+
+                // if the CMDB rack is not blank and doesn't match ACDC, update ACDC
+                if ($cabinet->getSysId() && $cmdbCI->getRackId() != $cabinet->getSysId()) {
+
+                    if ($cmdbCI->getRack() == $cabinet->getName()) {
+                        // names are the same, update acdc with the proper SysId
+                        $cabinet->setSysId($cmdbCI->getRackId());
+                        $cabinetTable->update($cabinet);
+                        outlog("[ACDC UPDATE SYSID]");
+                    }
+                    else {
+                        // try to find this rack in CMDB
+                        $cmdbRack = $cmdbRackTable->getMostRecentByNameAndLocationId($cabinet->getName(), $location->getSysId());
+
+                        if ($cmdbRack->getSysId()) {
+                            // rack exists in CMDB. update cmdb assest with ACDC rack info
+                            $cmdbCI->setRackId($cmdbRack->getSysId());
+
+                            if ($options->update) $cmdbTable->update($cmdbCI);
+                            $summary->cmdbRackUpdated++;
+                            outlog("[CMDB UPDATE]");
+                        } else {
+                            // note the exception that rack was not found in CMDB
+                            if (!array_key_exists($cabinet->getName(), $racksNF)) {
+                                $racksNF[$cabinet->getName()] = (object) array(
+                                    "locationName" => $cmdbCI->getLocation(),
+                                    "numAssets" => 0
+                                );
+                                $summary->rackNotFound++;
+                                outlog("[CMDB     NF]");
+                            }
+                            $racksNF[$cabinet->getName()]->numAssets++;
+                        }
+                    }
+
+                } else {
+                    outlog("[CMDB NO CHG]");
+                }
+            }
+			outlog("\n");
+
+
+			// check elevation
+			outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "ELEVATION", "CMDB:",
+                $cmdbCI->getRackPosition() ? $cmdbCI->getRackPosition() : "-", "ACDC:", $asset->getElevation() ? $asset->getElevation() : "-"));
+
+            if ($options->override == "sn") {
+                // CMDB Override
+
+                // if the cmdb elevation is not blank and does not match ACDC, then update ACDC
+                if ($cmdbCI->getRackPosition() != "" && $cmdbCI->getRackPosition() != 0 && $cmdbCI->getRackPosition() != $asset->getElevation()) {
+                    $asset->setElevation($cmdbCI->getRackPosition());
+
+                    if ($options->update) $assetTable->update($asset);
+                    $summary->acdcElevUpdated++;
+                    outlog("[ACDC UPDATE]");
+                }
+                else {
+                    outlog("[ACDC NO CHG]");
+                }
+            } else {
+                // ACDC Override
+
+                // if the ACDC elevation is not blank and does not match CMDB, then update CMDB
+                if ($asset->getElevation() && $cmdbCI->getRackPosition() != $asset->getElevation()) {
+                    $cmdbCI->setRackPosition($asset->getElevation());
+
+                    if ($options->update) $cmdbTable->update($cmdbCI);
+                    $summary->cmdbElevUpdated++;
+                    outlog("[CMDB UPDATE]");
+                } else {
+                    outlog("[CMDB NO CHG]");
+                }
+            }
+			outlog("\n");
+
+
+			// check number of rack units
+			outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "RACK UNITS", "CMDB:",
+                $cmdbCI->getNumberOfRackUnits() ? $cmdbCI->getNumberOfRackUnits() : "-", "ACDC:", $asset->getNumRUs() ? $asset->getNumRUs() : "-"));
+
+            if ($options->override == "sn") {
+                // CMDB Override
+
+                // if the cmdb RUs is not blank and does not match ACDC, then update ACDC
+                if ($cmdbCI->getNumberOfRackUnits() && $cmdbCI->getNumberOfRackUnits() != $asset->getNumRUs()) {
+                    $asset->setNumRUs($cmdbCI->getNumberOfRackUnits());
+
+                    if ($options->update) $assetTable->update($asset);
+                    $summary->acdcRUsUpdated++;
+                    outlog("[ACDC UPDATE]");
+                }
+                else {
+                    outlog("[ACDC NO CHG]");
+                }
+            } else {
+                // ACDC Override
+
+                // if the ACDC RUs is not blank and does not match CMDB, then update CMDB
+                if ($asset->getNumRUs() && $cmdbCI->getNumberOfRackUnits() != $asset->getNumRUs()) {
+                    $cmdbCI->setNumberOfRackUnits($asset->getNumRUs());
+
+                    if ($options->update) $cmdbTable->update($cmdbCI);
+                    $summary->cmdbRUsUpdated++;
+                    outlog("[CMDB UPDATE]    ");
+                } else {
+                    outlog("[CMDB NO CHG]    ");
+                }
+            }
+			outlog("\n");
+
+
+            // if this is a blade chassis, get all the associated blades and update their location, rack and elevation in CMDB no matter the override
+            // to be the same as the chassis
+            if ($cmdbCI->getSysClassName() == "cmdb_ci_server" && $cmdbCI->getHostType() == "Blade Chassis") {
+                // get the chassis by sys id from the HP SIM cache
+                $chassis = $hpsimChassisTable->getBySysId($cmdbCI->getSysId());
+
+                if ($chassis->getId()) {
+                    // we found the chassis so get all its blades
+                    $blades = $hpsimBladeTable->getByChassisId($chassis->getId());
+
+                    // loop over each blade and update its physical info in CMDB
+                    for ($b=0; $b<count($blades); $b++) {
+                        $blade = $blades[$b];
+                        $bladeUpdated = false;
+
+                        if ($blade->getSysId()) {
+                            $cmdbBlade = $cmdbServerTable->getBySysId($blade->getSysId());
+
+                            outlog(sprintf("%14s %-40s %44s %s\n", "", $cmdbBlade->getName(), "", "blade_server"));
+
+			                outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "LOCATION", "CHASSIS:", $cmdbCI->getLocation() ? $cmdbCI->getLocation() : "-", "BLADE:", $cmdbBlade->getLocation() ? $cmdbBlade->getLocation() : "-"));
+                            if ($cmdbBlade->getLocationId() != $cmdbCI->getLocationId()) {
+                                $cmdbBlade->setLocationId($cmdbCI->getLocationId());
+                                $bladeUpdated = true;
+  	    		                outlog("[CMDB UPDATE]\n");
+                            } else {
+  	    		                outlog("[CMDB NO CHG]\n");
+                            }
+
+			                outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "RACK", "CHASSIS:", $cmdbCI->getRack() ? $cmdbCI->getRack() : "-", "BLADE:", $cmdbBlade->getRack() ? $cmdbBlade->getRack() : "-"));
+                            if ($cmdbBlade->getRackId() != $cmdbCI->getRackId()) {
+                                $cmdbBlade->setRackId($cmdbCI->getRackId());
+                                $bladeUpdated = true;
+  	    		                outlog("[CMDB UPDATE]\n");
+                            } else {
+  	    		                outlog("[CMDB NO CHG]\n");
+                            }
+
+			                outlog(sprintf("%19s %-43s %-8s %-30s %-8s %-31s", "", "ELEVATION", "CHASSIS:", $cmdbCI->getRackPosition() ? $cmdbCI->getRackPosition() : "-", "BLADE:", $cmdbBlade->getRackPosition() ? $cmdbBlade->getRackPosition() : "-"));
+                            if ($cmdbBlade->getRackPosition() != $cmdbCI->getRackPosition()) {
+                                $cmdbBlade->setRackPosition($cmdbCI->getRackPosition());
+                                $bladeUpdated = true;
+  	    		                outlog("[CMDB UPDATE]\n");
+                            } else {
+  	    		                outlog("[CMDB NO CHG]\n");
+                            }
+
+                            if ($options->update) $cmdbServerTable->update($cmdbBlade);
+
+                            if ($bladeUpdated) {
+                                $summary->cmdbBladesUpdated++;
+                            }
+                        } else {
+                            // blade not found in HP SIM
+                            outlog(sprintf("%14s %-40s %44s %s\n", "", $blade->getDeviceName(), "", "BLADE NOT FOUND"));
+                        }
+                    }
+                } else {
+                    // chassis not found in HP SIM
+                    outlog(sprintf("%19s %-43s\n", "", "CHASSIS NOT FOUND"));
+                }
+            }
+
+            // Finally, let's check to see what info might be missing in the ACDC asset record so that we can create an exception report
+            /*
+            if ($cabinet->getLocationId() == null || $cabinet->getLocationId() == "") {
+                $acdcMissingLoc[$asset->getName()] = $asset;
+            }
+            if ($asset->getCabinetId() == null || $asset->getCabinetId() == "") {
+                $acdcMissingRack[$asset->getName()] = $asset;
+            }
+            if ($asset->getElevation() == 0) {
+                $acdcMissingElev[$asset->getName()] = $asset;
+            }
+            if ($asset->getNumRUs() == 0) {
+                $acdcMissingNumRUs[$asset->getName()] = $asset;
+            }
+            */
+
+            // update the acdc asset with cmdb information
+            if (!$asset->getSysId()) {
+                $idsArray = explode(",", $cmdbCI->getSubsystemListId());
+                $subsystemId = $idsArray[0];
+                $namesArray = explode(",", $cmdbCI->getSubsystemList());
+                $subsystemName = $namesArray[0];
+
+                $bsIdsArray = explode(",", $cmdbCI->getBusinessServicesIds());
+                $bsId = $bsIdsArray[0];
+                $bsNamesArray = explode(",", $cmdbCI->getBusinessServices());
+                $bsName = $bsNamesArray[0];
+
+                $businessServerTable = new BusinessServiceTable();
+                $subsystemTable = new SubsystemTable();
+
+                $bs = $businessServerTable->getBySysId($bsId);
+                if (!$bs->getSysId() && $bsName) {
+                    $bs->setSysId($bsId)->setName($bsName);
+                    $businessServerTable->create($bs);
+                }
+                $ss = $subsystemTable->getBySysId($subsystemId);
+                if (!$ss->getSysId() && $subsystemName) {
+                    $ss->setSysId($subsystemId)->setName($subsystemName);
+                    $subsystemTable->create($ss);
+                }
+
+                $asset
+                    ->setSysId($cmdbCI->getSysId())
+                    ->setInstallStatus($cmdbCI->getInstallStatus())
+                    ->setSubsystemSysId($subsystemId)
+                    ->setBusinessServiceSysId($bsId)
+                    ->setFoundBy($foundBy);
+                $assetTable->update($asset);
+            }
+		}
+	}
+
+    fclose($fdMultiple);
+
+	// write out the assets not found in CMDB
+	$fd = fopen($config->logDir . "/" . $config->assetsNFFileName . "." . $now, "w");
+	fwrite($fd, sprintf("%-25s %-25s %-20s %-30s %-20s %-10s\n", "Hostname", "Serial Num", "Asset Num", "Model", "Location", "Rack"));
+	foreach ($assetsNF as $hostName => $asset) {
+	    /** @var Asset $asset */
+        $cabinet = $cabinetTable->getByid($asset->getCabinetId());
+        $location = $locationTable->getById($cabinet->getLocationId());
+		fwrite($fd, sprintf("%-25s %-25s %-20s %-30s %-20s %-10s\n", $asset->getName(), $asset->getSerialNumber(), $asset->getAssetTag(), $asset->getModel(), $location->getName(), $cabinet->getName()));
+	}
+	fclose($fd);
+
+    // write out locations not found in CMDB
+	$fd = fopen($config->logDir . "/" . $config->locationsNFFileName . "." . $now, "w");
+	fwrite($fd, sprintf("%-30s %-20s\n", "Location", "Num Assets in this Location"));
+	foreach ($locationsNF as $location => $count) {
+		fwrite($fd, sprintf("%-30s %20d\n", $location, $count));
+	}
+	fclose($fd);
+
+    // write out racks not found in CMDB
+	$fd = fopen($config->logDir . "/" . $config->racksNFFileName . "." . $now, "w");
+	fwrite($fd, sprintf("%-20s %-20s %-20s\n", "Location", "Rack", "Num Assets in this Rack"));
+	foreach ($racksNF as $rackName => $o) {
+		fwrite($fd, sprintf("%-20s %-20s %20d\n", $o->locationName, $rackName, $o->numAssets));
+	}
+	fclose($fd);
+
+    // write out assets found in CMDB that are marked as decommissioned
+    $fd = fopen($config->logDir . "/" . $config->assetsDecommedFileName . "." . $now, "w");
+   	fwrite($fd, sprintf("%-20s %-20s %-40s %-25s %-25s\n", "Location", "Rack", "Name", "Serial Num", "Asset Num"));
+   	foreach ($assetsDecommed as $assetName => $cmdbCI) {
+        /** @var CMDBCI $cmdbCI */
+   		fwrite($fd, sprintf("%-20s %-20s %-40s %-25s %-25s\n", $cmdbCI->getLocation(), $cmdbCI->getRack(), $assetName, $cmdbCI->getSerialNumber(), $cmdbCI->getAssetTag()));
+   	}
+   	fclose($fd);
+
+    // write out ACDC assets missing a location
+    $fd = fopen($config->logDir . "/" . $config->acdcMissingLocFileName . "." . $now, "w");
+   	fwrite($fd, sprintf("%-40s %-10s %-4s %-6s %-20s %-10s %-20s %-20s\n", "Name", "Rack", "Elev", "NumRUs", "Serial Num", "Asset Num", "Manufacturer", "Model"));
+   	foreach ($acdcMissingLoc as $assetName => $asset) {
+        /** @var Asset $asset */
+        $cabinet = $cabinetTable->getByid($asset->getCabinetId());
+   		fwrite($fd, sprintf("%-40s %-10s %4d %6d %-20s %-10s %-20s %-20s\n",
+            $assetName, $cabinet->getName(), $asset->getElevation(), $asset->getNumRUs(), $asset->getSerialNumber(), $asset->getAssetTag(), $asset->getManufacturer(), $asset->getModel()));
+   	}
+   	fclose($fd);
+
+    // write out ACDC assets missing a rack
+    $fd = fopen($config->logDir . "/" . $config->acdcMissingRackFileName . "." . $now, "w");
+   	fwrite($fd, sprintf("%-40s %-4s %-6s %-20s %-10s %-20s %-20s\n", "Name", "Elev", "NumRUs", "Serial Num", "Asset Num", "Manufacturer", "Model"));
+   	foreach ($acdcMissingRack as $assetName => $asset) {
+        /** @var Asset $asset */
+   		fwrite($fd, sprintf("%-40s %4d %6d %-20s %-10s %-20s %-20s\n",
+            $assetName, $asset->getElevation(), $asset->getNumRUs(), $asset->getSerialNumber(), $asset->getAssetTag(), $asset->getManufacturer(), $asset->getModel()));
+   	}
+   	fclose($fd);
+
+    // write out ACDC assets missing elevation
+    $fd = fopen($config->logDir . "/" . $config->acdcMissingElevFileName . "." . $now, "w");
+   	fwrite($fd, sprintf("%-40s %-10s %-10s %-6s %-20s %-10s %-20s %-20s\n", "Name", "Location", "Rack", "NumRUs", "Serial Num", "Asset Num", "Manufacturer", "Model"));
+   	foreach ($acdcMissingElev as $assetName => $asset) {
+        /** @var Asset $asset */
+        $cabinet = $cabinetTable->getByid($asset->getCabinetId());
+        $location = $locationTable->getById($cabinet->getLocationId());
+   		fwrite($fd, sprintf("%-40s %-10s %-10s %6d %-20s %-10s %-20s %-20s\n",
+            $assetName, $location->getName(), $cabinet->getName(), $asset->getNumRUs(), $asset->getSerialNumber(), $asset->getAssetTag(), $asset->getManufacturer(), $asset->getModel()));
+   	}
+   	fclose($fd);
+
+    // write out ACDC assets missing number of RUs
+    $fd = fopen($config->logDir . "/" . $config->acdcMissingRUsFileName . "." . $now, "w");
+   	fwrite($fd, sprintf("%-40s %-10s %-10s %-4s %-20s %-10s %-20s %-20s\n", "Name", "Location", "Rack", "Elev", "Serial Num", "Asset Num", "Manufacturer", "Model"));
+   	foreach ($acdcMissingRUs as $assetName => $asset) {
+        /** @var Asset $asset */
+        $cabinet = $cabinetTable->getByid($asset->getCabinetId());
+        $location = $locationTable->getById($cabinet->getLocationId());
+   		fwrite($fd, sprintf("%-40s %-10s %-10s %4d %-20s %-10s %-20s %-20s\n",
+            $assetName, $location->getName(), $cabinet->getName(), $asset->getElevation(), $asset->getSerialNumber(), $asset->getAssetTag(), $asset->getManufacturer(), $asset->getModel()));
+   	}
+   	fclose($fd);
+
+	// write the summary to the end of the log file and close it
+	outlog(generateSummary());
+	fclose($logFilePtr);
+}
+
+catch (Exception $e) {
+	global $options, $logString, $config, $title;
+
+	$emailTo   = $config->adminEmail;
+	$emailFrom = $config->adminEmail;
+	$emailSubj = "ACDC: {$title} Error Report";
+
+	$headers = implode("\r\n", array(
+		"MIME-Version: 1.0\r\n",
+		"Content-type: text/html; charset=us-ascii\r\n",
+		"From: {$emailFrom}\r\n",
+		"Reply-To: {$emailFrom}\r\n",
+		"X-Priority: 1\r\n",
+		"X-MSMail-Priority: High\r\n",
+		"X-Mailer: PHP/" . phpversion()
+	));
+
+	$traceBack = "returnCode: 1\n" .
+		"errorCode:  {$e->getCode()}\n" .
+		"errorText:  {$e->getMessage()}\n" .
+		"errorFile:  {$e->getFile()}\n" .
+		"errorLine:  {$e->getLine()}\n" .
+		"errorStack: {$e->getTraceAsString()}\n";
+
+	outlog("{$traceBack}\n");
+
+	if (isset($summary)) {
+		outlog(generateSummary());
+	}
+
+	if (!$options->stdOut) {
+		$emailBody = "<pre style='font-size:6pt;'>\n" .
+			"{$logString}\n" .
+			"</pre>\n";
+		mail($emailTo, $emailSubj, $emailBody, $headers);
+	}
+	exit;
+}
+
+/**
+ * @param $sysClassName
+ * @return CMDBNetworkDeviceTable|CMDBSANSwitchTable|CMDBServerTable|CMDBStorageDeviceTable
+ * @throws ErrorException
+ */
+function getCmdbTable($sysClassName)
+{
+    $useUserCredentials = false;
+    switch ($sysClassName) {
+        case "cmdb_ci_server":
+            return new CMDBServerTable($useUserCredentials);
+            break;
+        case "cmdb_ci_msd":
+            return new CMDBStorageDeviceTable($useUserCredentials);
+            break;
+        case "u_san_switches_storage":
+            return new CMDBSANSwitchTable($useUserCredentials);
+            break;
+        case "cmdb_ci_netgear":
+            return new CMDBNetworkDeviceTable($useUserCredentials);
+            break;
+        default:
+            throw new ErrorException("Unknown sys_class_name: " . $sysClassName);
+    }
+}
+
+
+function parseOptions()
+{
+	// command line opts
+	$opts = getopt('husrt:n:N:o:');
+
+	// usage if -h
+	if ($opts && array_key_exists('h', $opts)) {
+		usage();
+	}
+
+    if ($opts && array_key_exists('o', $opts) && !preg_match("/sn|acdc/", $opts['o'])) {
+        print "override parameter must be one of 'sn' or 'acdc'\n";
+        usage();
+    }
+
+	// define options
+	$options = (object) array(
+		"stdOut"       => array_key_exists('s', $opts) ? true : false,
+		"update"       => array_key_exists('u', $opts) ? false : true,
+		"forceRun"     => array_key_exists('r', $opts) ? true : false,
+        "override"     => array_key_exists('o', $opts) ? strtolower($opts['o']) : 'acdc',
+		"targetHost"   => array_key_exists('t', $opts) ? strtolower($opts['t']) : false,
+		"lineNumber"   => array_key_exists('n', $opts) ? $opts['n'] : false,
+		"lineNumStart" => array_key_exists('N', $opts) ? $opts['N'] : false
+	);
+
+	return $options;
+}
+
+function usage()
+{
+	print "Usage: acdc_cmdb_sync [-hsur][-t target_host][-n line_number]\n";
+	print "\n";
+	print "       -h           this help\n";
+	print "       -u           no updates, just show actions\n";
+	print "       -s           outlog to STDOUT in real time\n";
+	print "       -r           force run even if runCronJobs is false\n";
+    print "       -o sn|acdc    override: force updates to ServiceNow or ACDC\n";
+	print "       -t host      target host; only run against this host\n";
+	print "       -n lineNum   process line number lineNum\n";
+	print "       -N lineNum   start processing at line number lineNum\n";
+	exit;
+}
+
+function generateSummary()
+{
+	global $startTime, $summary, $summaryNameWidth, $options;
+
+    if ($options->targetHost) {
+        exit;
+    }
+
+	// calc elapsed time
+	$endTime       = time();
+	$elapsedSecs   = $endTime - $startTime;
+	$elapsedFormat = sprintf("%02d:%02d", floor($elapsedSecs / 60), $elapsedSecs % 60);
+
+	return sprintf("\n\nSummary\n%'-60s\n", "") .
+
+	sumOutput("ACDC Hosts", $summary->numAssets) .
+
+	sumOutput("ACDC Location Missing", $summary->missingLoc, $summary->numAssets) .
+    sumOutput("ACDC Rack Missing", $summary->missingRack, $summary->numAssets) .
+    sumOutput("ACDC Elevation Missing", $summary->missingElev, $summary->numAssets) .
+    sumOutput("ACDC RUs Missing", $summary->missingRUs, $summary->numAssets) .
+    "\n" .
+    sumOutput("CMDB Found", $summary->numFound, $summary->numAssets) .
+    sumOutput("CMDB Case Change", $summary->numCaseChange, $summary->numAssets) .
+    sumOutput("CMDB Not Found", $summary->numNotFound, $summary->numAssets) .
+   	sumOutput("CMDB Multiple", $summary->numMultiple, $summary->numAssets) .
+   	sumOutput("CMDB Rack Not Found", $summary->rackNotFound, $summary->numAssets) .
+    "\n" .
+	sumOutput("ACDC Locations Updated", $summary->acdcLocUpdated, $summary->numAssets) .
+    sumOutput("ACDC Locations Created", $summary->acdcLocCreated, $summary->numAssets) .
+	sumOutput("ACDC Racks Updated", $summary->acdcRackUpdated, $summary->numAssets) .
+	sumOutput("ACDC Racks Created", $summary->acdcRacksCreated, $summary->numAssets) .
+	sumOutput("ACDC Elevations Updated", $summary->acdcElevUpdated, $summary->numAssets) .
+	sumOutput("ACDC RUs Updated", $summary->acdcRUsUpdated, $summary->numAssets) .
+    "\n" .
+	sumOutput("CMDB Locations Updated", $summary->cmdbLocUpdated, $summary->numAssets) .
+	sumOutput("CMDB Racks Updated", $summary->cmdbRackUpdated, $summary->numAssets) .
+	sumOutput("CMDB Elevations Updated", $summary->cmdbElevUpdated, $summary->numAssets) .
+	sumOutput("CMDB RUs Updated", $summary->cmdbRUsUpdated, $summary->numAssets) .
+	"\n" .
+    sumOutput("CMDB Blades Updated", $summary->cmdbBladesUpdated) .
+    "\n" .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Start Time", date("Y-m-d H:i:s", $startTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "End Time", date("Y-m-d H:i:s", $endTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Elapsed Time", $elapsedFormat) .
+	"Synchronization Complete\n";
+}
+
+function sumOutput($title, $count, $total = null)
+{
+	global $summaryNameWidth;
+
+	if ($total) {
+		return sprintf("%-{$summaryNameWidth}s: %5d (%4.1f%%)\n", $title, $count, round($count / $total * 100, 1));
+	}
+	else {
+		return sprintf("%-{$summaryNameWidth}s: %5d\n", $title, $count);
+	}
+}
+
+function outlog($logMsg)
+{
+	global $options, $logFilePtr, $logString;
+
+	if ($options->stdOut) {
+		print $logMsg;
+	}
+	fwrite($logFilePtr, $logMsg);
+	$logString .= $logMsg;
+}
+
+/** @var $e Exception */
+function printException($e)
+{
+	outlog("\n");
+	outlog(sprintf("%-12s => %s\n", "returnCode", 1));
+	outlog(sprintf("%-12s => %s\n", "errorCode", $e->getCode()));
+	outlog(sprintf("%-12s => %s\n", "errorText", $e->getMessage()));
+	outlog(sprintf("%-12s => %s\n", "errorFile", $e->getFile()));
+	outlog(sprintf("%-12s => %s\n", "errorLine", $e->getLine()));
+	outlog(sprintf("%-12s => \n%s\n", "errorStack", $e->getTraceAsString()));
+	exit;
+}
+
+?>

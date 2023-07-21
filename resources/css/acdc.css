@@ -1,0 +1,487 @@
+/*******************************************************************************
+*
+* $Id: acdc.css 81636 2013-12-03 19:29:11Z rcallaha $
+* $Date: 2013-12-03 14:29:11 -0500 (Tue, 03 Dec 2013) $
+* $Author: rcallaha $
+* $Revision: 81636 $
+* $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/resources/css/acdc.css $
+*
+*******************************************************************************
+*/
+
+body {
+	margin: 2pt 5pt 0 2pt;
+	font-family: arial,serif;
+	font-size: 14px;
+}
+
+.titleblock {
+	position: absolute;
+	left: 14px;
+	top: 0;
+}
+
+.navblock {
+	float: right;
+	margin-right: 20px;
+}
+.nav {
+	font-family: tahoma, arial, sans-serif !important;
+	font-size: 14px !important;
+}
+
+.header-info {
+	font-family: tahoma, arial, sans-serif !important;
+	font-size: 14px;
+	margin-right: 15px;
+}
+
+.welcome {
+	float: left;
+	margin-top: 5px;
+	margin-left: 300px;
+}
+
+.tagLine {
+    font-size: 7pt;
+    font-weight: normal;
+    margin-left: 40px;
+}
+
+/* Footer */
+.footer {
+	margin: 0;
+	padding: 2px;
+	text-align: center;
+	font-size: 6pt;
+}
+
+.releaseInfo {
+	font-size: 6pt;
+	font-weight: bold;
+	color: black; 
+	background-color: transparent; 
+}
+
+/* toolbar icons */
+.video { background-image: url("../images/video_icon.png") !important; }
+
+/* Links */
+.nav a:link, .nav a:visited, .nav a:hover, .nav a:active { 
+    /*color: #00ff84; */
+}
+
+.footer a:link, .footer a:visited, .footer a:hover, .footer a:active { 
+	color: black !important;
+}
+
+/* form */
+.form-text {
+    font-size: 10pt;
+    font-weight: normal;
+}
+
+/* canvas */
+.canvas-div {
+    height: 100%;
+    width: 100%;
+    overflow: scroll;
+}
+
+.canvas {
+    height: 2000px;
+    width: 2000px;
+}
+.canvas-panel-body {
+    /* overflow: scroll !important; */
+}
+
+/* asset details */
+.ass-editable-property {
+    color: green;
+}
+.ass-invalid-value {
+    color: red;
+}
+
+
+.cab-tooltip {
+    position: absolute;
+    display: none;
+    left: -100px;
+    top: -100px;
+    border: 1px solid black;
+    background-color: #D5DDE4;
+    font-size: 9pt;
+    padding: 8px;
+}
+
+/* Cabinet elevation display */
+.cab-details-panel {
+    /*background-color: #D4E1F2 !important;*/
+}
+.cab-title {
+    position: relative;
+    left: -5px;
+    top: 24px;
+
+    font-size: 12pt;
+    font-weight: bold;
+    text-align: center;
+
+    color: yellow;
+}
+.cab-array-title {
+    position: relative;
+    width: 280px;
+    left: 10px;
+    top: 26px;
+
+    font-size: 12pt;
+    font-weight: bold;
+    text-align: center;
+
+    color: yellow;
+}
+.cab-table {
+    border: 0;
+    padding: 0;
+    margin-left: 5px;
+    margin-top: 0;
+}
+.cab-td-top {
+    background-image: url('../images/cabinet_top.png');
+    background-size: 292px 43px;
+    height: 43px;
+}
+.cab-td-middle {
+    vertical-align: top;
+    height: 100%;
+    background-image: url('../images/cabinet_middle.jpg');
+}
+.cab-td-bottom {
+    background-image: url('../images/cabinet_bottom.jpg');
+    background-size: 292px 67px;
+    height: 67px;
+}
+
+.cab-div-main {
+    text-align: center;
+    padding-left: 28px;
+    margin: 0;
+    width: 260px;
+}
+.cab-table-main {
+    width: 100%;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background-color: #868686;
+}
+.cab-tr {
+    height: 17px;
+}
+
+.cab-details-title {
+    font-size: 12pt;
+    font-weight: bold;
+    text-align: center;
+
+    color: black;
+}
+.cab-details-asset-name {
+    padding-top: 10px;
+    font-weight: bold;
+    text-decoration: underline;
+    cursor: pointer;
+}
+.cab-details-spacer {
+    width: 25px;
+}
+.cab-details-td {
+    padding-right: 10px;
+}
+.cab-details-notincmdb {
+    padding-top: 10px;
+    color: red;
+    font-weight: bold;
+}
+.cab-details-elevation-missing {
+    color: red;
+    font-weight: bold;
+}
+.cab-details-numrus-missing {
+    color: red;
+    font-weight: bold;
+}
+
+.cab-hp-chassis-table {
+    margin-left: 10px;
+    width: 215px;
+}
+.cab-hp-chassis-tr {
+    height: 170px;
+}
+.cab-ru-filled {
+    padding: 0;
+    margin-bottom: 0;
+    background-image: url('../images/filled_panel_17.png');
+    background-size: 236px 17px;
+    width: 236px;
+    height: 17px;
+    font-size: 12px;
+    /*border-top: 1px black;*/
+}
+.cab-ru-empty {
+    padding: 0;
+    margin: 0;
+    background-image: url('../images/blank_panel_17.png');
+    background-size: 236px 17px;
+    width: 236px;
+    height: 16px;
+    border-top: 1px solid black;
+    font-size: 12px;
+}
+.cab-ru-unusable {
+    border-top: 1px solid black !important;
+    background-image: url('../images/unusable_panel_17.png');
+}
+.cab-ru-reserved {
+    border-top: 1px solid black !important;
+    background-image: url('../images/reserved_panel_17.png');
+}
+.cab-ru-reservation-label {
+    font-size: 14px;
+    margin-left: 15px;
+}
+.cab-ru-reserved-contiguous {
+    border-top: none !important;
+}
+.cab-ru-selected {
+    border: 1px solid yellow
+}
+.cab-mouseover {
+    border: 1px solid yellow !important;;
+}
+.cab-asset {
+    padding: 0;
+    margin-bottom: 0;
+}
+.cab-asset-full-rack {
+    margin-left: 12px;
+    background-size: 288px 860px;
+    width: 288px;
+    height: 860px;
+    cursor: pointer;
+}
+
+.text-link {
+    text-decoration: underline;
+    cursor: pointer;
+}
+.red-alert {
+    font-weight: bold;
+    color: red;
+}
+.cab-ru-label {
+    z-index: 10;
+    position: relative;
+    left: 70px;
+    top: 1px;
+    background-color: black;
+    width: 120px;
+    height: 15px;
+}
+.cab-array-label {
+    z-index: 10;
+    position: relative;
+    left: 70px;
+    top: 50px;
+    background-color: black;
+    width: 150px;
+    height: 15px;
+}
+.cab-ru-name {
+    z-index: 11;
+    text-align: center;
+    font-size: 12px;
+    font-weight: normal;
+    color: yellow;
+}
+.cab-ru-name-exception {
+    color: red;
+    font-size: 10px;
+    padding-bottom: 5px;
+}
+.cab-ru-number {
+    padding: 0;
+    margin-bottom: 0;
+    width: 20px;
+    height: 17px;
+    font-size: 12px;
+    font-weight: normal;
+    color: yellow;
+    background-color: black;
+    vertical-align: middle;
+    text-align: center;
+}
+.cab-hp-chassis {
+    background-image: url('../images/hp_chassis.png');
+    background-size: 236px 170px;
+    width: 236px;
+    height: 170px;
+}
+.cab-hp-chassis-label {
+    z-index: 10;
+    position: relative;
+    left: 70px;
+    top: -142px;
+    background-color: black;
+    width: 100px;
+    height: 18px;
+}
+.cab-hp-chassis-name {
+    z-index: 11;
+    font-size: 12px;
+    font-weight: normal;
+    padding-top: 1px;
+    text-align: center;
+    color: yellow;
+}
+.cab-hp-blade-half-height-active {
+    background-image: url('../images/hp_blade_half_height.png');
+    background-size: 26px 72px;
+    width: 26px;
+    height: 72px;
+    margin-left: 0;
+}
+.cab-hp-blade-half-height-empty {
+    background-image: url('../images/hp_blade_half_height_empty.png');
+    background-size: 26px 72px;
+    width: 26px;
+    height: 72px;
+    margin-left: 0;
+}
+.cab-hp-blade-full-height-active {
+    background-image: url('../images/hp_blade_full_height.png');
+    background-size: 26px 144px;
+    width: 26px;
+    height: 144px;
+    margin-left: 0;
+}
+.cab-hp-blade-active {
+    border: 2px solid #78C07B;
+}
+.cab-hp-blade-spare {
+    border: 2px solid #800080;
+}
+.cab-hp-blade-inventory {
+    border: 2px solid #9BBFE6;
+}
+
+
+.exceptions-nav {
+    width: 198px;
+}
+
+.exceptions-nav-row {
+    width: 198px;
+    height: 30px;
+    cursor: pointer;
+
+    background: #d4e1f2; /* Old browsers */
+    background: #d4e1f2; /* Old browsers */
+    background: -moz-linear-gradient(top,  #d4e1f2 71%, #99bbe8 100%); /* FF3.6+ */
+    background: -webkit-gradient(linear, left top, left bottom, color-stop(71%,#d4e1f2), color-stop(100%,#99bbe8)); /* Chrome,Safari4+ */
+    background: -webkit-linear-gradient(top,  #d4e1f2 71%,#99bbe8 100%); /* Chrome10+,Safari5.1+ */
+    background: -o-linear-gradient(top,  #d4e1f2 71%,#99bbe8 100%); /* Opera 11.10+ */
+    background: -ms-linear-gradient(top,  #d4e1f2 71%,#99bbe8 100%); /* IE10+ */
+    background: linear-gradient(to bottom,  #d4e1f2 71%,#99bbe8 100%); /* W3C */
+    filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#d4e1f2', endColorstr='#99bbe8',GradientType=0 ); /* IE6-9 */
+}
+
+.exceptions-nav-table {
+    padding-top: 4px;
+}
+.exceptions-nav-cell {
+    font-size: 14px;
+}
+.exceptions-nav-cell-value {
+    font-size: 14px;
+    text-align: right;
+    padding-right: 5px;
+}
+.exceptions-selected {
+    font-weight: bold;
+}
+
+/*
+  Icons
+*/
+.reservations { background-image:url(../images/icons/book_open.png) !important; }
+.reservation-new { background-image:url(../images/icons/book_add.png) !important; }
+.reservation-modify { background-image:url(../images/icons/book_edit.png) !important; }
+.reservation-cancel { background-image:url(../images/icons/book_delete.png) !important; }
+.reservation-complete { background-image:url(../images/icons/book_go.png) !important; }
+/*
+.usable { background-image:url(../images/icons/accept.png) !important; }
+.unusable { background-image:url(../images/icons/cancel.png) !important; }
+*/
+.usable { background-image:url(../images/icons/page_edit.png) !important; }
+
+
+/*
+  Ext Overrides 
+*/
+
+.x-form-check-wrap {
+    margin-bottom: 4px !important;
+}
+
+.x-panel-body {
+    background-color: #D5DDE4 !important;
+}
+
+.x-toolbar div.xtb-text {
+    color: black;
+    display: block;
+    line-height: 16px;
+    padding: 2px 2px 0;
+}
+
+.acdc-btn .x-btn-tl{
+	background-position: -6px 0;
+}
+
+.acdc-btn .x-btn-tr{
+	background-position: -9px 0;
+}
+
+.acdc-btn .x-btn-tc{
+	background-position: 0 -9px;
+}
+
+.acdc-btn .x-btn-ml{
+	background-position: -6px -24px;
+}
+
+.acdc-btn .x-btn-mr{
+	background-position: -9px -24px;
+}
+
+.acdc-btn .x-btn-mc{
+	background-position: 0 -2168px;
+}
+
+.acdc-btn .x-btn-bl{
+	background-position: -6px -3px;
+}
+
+.acdc-btn .x-btn-br{
+	background-position: -9px -3px;
+}
+
+.acdc-btn .x-btn-bc{
+	background-position: 0 -18px;
+}
+

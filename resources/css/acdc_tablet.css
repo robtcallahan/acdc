@@ -1,0 +1,164 @@
+/*******************************************************************************
+*
+* $Id: acdc_tablet.css 81526 2013-11-28 19:27:43Z rcallaha $
+* $Date: 2013-11-28 14:27:43 -0500 (Thu, 28 Nov 2013) $
+* $Author: rcallaha $
+* $Revision: 81526 $
+* $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/resources/css/acdc_tablet.css $
+*
+*******************************************************************************
+*/
+
+.asset-up {
+    background-image:url(../images/icons/arrow_up.png) !important;
+    height: 22px !important;
+}
+.asset-down {
+    background-image:url(../images/icons/arrow_down.png) !important;
+    height: 22px !important;
+}
+.cabinet-prev {
+    background-image:url(../images/icons/arrow_left.png) !important;
+    height: 22px !important;
+}
+.cabinet-next {
+    background-image:url(../images/icons/arrow_right.png) !important;
+    height: 22px !important;
+}
+
+.asset-selected {
+    color: blue;
+}
+
+.title {
+    font-size: 26px;
+    font-weight: bold;
+}
+.tagLine {
+    font-size: 20px;
+    font-weight: normal;
+    margin-left: 40px;
+}
+
+.cab-table {
+    width: 100%;
+    border: 0;
+    padding: 0;
+    margin-left: 5px;
+    margin-top: 5px;
+}
+.cab-assets-cell {
+    font-size: 20px;
+    line-height: 26px;
+    border-top: 1px solid slategray;
+}
+
+.cab-assets-cell-no-border {
+    font-size: 20px;
+    line-height: 26px;
+    border: 0;
+}
+
+.cab-assets-pointer {
+    cursor: pointer;
+}
+
+/*
+  Ext Overrides 
+*/
+
+/* Form elements */
+.x-form-field {
+    font: 22px tahoma,arial,helvetica,sans-serif !important;
+}
+.x-form-text, .ext-ie .x-form-file {
+    height: 36px !important;
+}
+.form-text {
+    font: 22px tahoma,arial,helvetica,sans-serif !important;
+}
+.x-form-item {
+    font: 22px tahoma,arial,helvetica,sans-serif !important;
+}
+
+/* tips */
+.x-tip-body {
+    font: 18px tahoma,arial,helvetica,sans-serif !important;
+}
+
+/* Panel title */
+.x-panel-header {
+    font-size: 28px;
+}
+
+/* Search field label */
+div.xtb-text {
+    line-height: 26px !important;
+    font-size: 22px !important;
+    color: white;
+}
+
+/* search field */
+.x-small-editor .x-form-field {
+    font: 26px arial,tahoma,helvetica,sans-serif !important;
+}
+.x-small-editor .x-form-text {
+    height: 36px;
+    line-height: 28px;
+    vertical-align: middle;
+}
+
+/* trigger */
+.x-small-editor .x-form-field-wrap .x-form-trigger {
+    background-size: 260px 42px;
+    height: 36px;
+    width: 48px;
+}
+.x-trigger-wrap-focus .x-form-trigger {
+    background-position: -82px 0;
+}
+
+
+/* Save and Cancel buttons */
+.x-btn-noicon .x-btn-small .x-btn-text {
+    height: 26px;
+}
+.x-btn-text-icon .x-btn-icon-small-left .x-btn-text {
+    height: 26px;
+}
+.x-btn button {
+    font: 22px arial,tahoma,verdana,helvetica;
+}
+
+/* column headers */
+.x-grid3-hd-row td {
+    font: 15px arial,tahoma,helvetica,sans-serif;
+}
+
+
+/* properties grid */
+.x-grid3-cell-first {
+    width: 30% !important;
+}
+
+.x-props-grid .x-grid3-body .x-grid3-td-name {
+    width: 30% !important;
+}
+.x-props-grid .x-grid3-cell {
+    font-size: 26px !important;
+    height: 30px;
+    /*width: 70% !important;*/
+}
+
+/* row font */
+.x-grid3-row td, .x-grid3-summary-row td {
+    font: 13px arial,tahoma,helvetica,sans-serif;
+}
+
+/* dialog box */
+.x-window-dlg .ext-mb-text, .x-window-dlg .x-window-header-text {
+    font: bold 20px tahoma,arial,helvetica,sans-serif !important;
+}
+.x-window-header .x-window-header-text {
+    font: bold 20px tahoma,arial,helvetica,sans-serif !important;
+}

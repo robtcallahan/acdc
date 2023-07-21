@@ -1,0 +1,439 @@
+#!/usr/bin/php
+<?php
+/*******************************************************************************
+ *
+ * $Id: weekly_activity_report 82443 2014-01-03 14:28:19Z rcallaha $
+ * $Date: 2014-01-03 09:28:19 -0500 (Fri, 03 Jan 2014) $
+ * $Author: rcallaha $
+ * $Revision: 82443 $
+ * $HeadURL: https://svn.ultradns.net/svn/sts_tools/acdc/trunk/bin/weekly_activity_report $
+ *
+ * Description:
+ * This cron job will run once per day and perform the following functions:
+ * - Query the history table for records inserted w/in the last week
+ * - Generate a formatted report and send an email to the users in the config->reportUsers array
+ *******************************************************************************
+ */
+
+chdir(__DIR__);
+
+include __DIR__ . "/../config/global.php";
+
+
+use STS\Util\SysLog;
+
+try {
+	// read the config file
+	$config = $GLOBALS['config'];
+
+	// get the command line options
+	$options = parseOptions();
+
+	// initialize syslog
+	$sysLog = new SysLog($config->appName);
+	$sysLog->setLogLevel($config->logLevel);
+
+	// check to see if we should run
+	if (!$config->runCronJobs && !$options->forceRun) {
+		print "runCronJobs is set to false in the config file. Exiting...\n";
+		exit;
+	}
+
+	/*********************************************************************/
+	/******************** Log Files & Headers ****************************/
+	/*********************************************************************/
+
+	// general definitions
+	$title      = "ACDC: Weekly Activity Report";
+	$scriptName = $argv[0];
+	$now        = date("Y-m-d-H-i");
+	$startTime  = time();
+
+	$optsNameWidth    = 25;
+	$summaryNameWidth = 30;
+
+    // calculate from and to times based upon current date and time
+    // go back 7 days from now
+    $timeTo = time();
+    $dateTo = date('Y-m-d H:i:s', $timeTo);
+    #$timeFrom = $timeTo - ONEMONTH;
+    $timeFrom = $timeTo - ONEWEEK;
+    $dateFrom = date('Y-m-d H:i:s', $timeFrom);
+
+	// open the log file; also keep a log string to send in email if exception is thrown
+	$logString  = "";
+	$logFile    = "{$config->logDir}/{$config->weeklyReportFileName}.{$now}";
+	$logFilePtr = fopen($logFile, "w");
+
+	$release = trim(file_get_contents("../ABOUT"));
+
+	$logHeader = "{$title} Log\n" .
+		"\n" .
+		"Release:    {$release}\n" .
+		"Host:       " . gethostname() . "\n" .
+		"SN Site:    {$config->servicenow->site}\n" .
+		"Script:     " . implode(' ', $argv) . "\n" .
+		"Start Time: " . date("Y-m-d H:i:s", $startTime) . "\n" .
+		"\n" .
+		"Options: \n" .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "StdOut",            $options->stdOut       ? "true" : "false") .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Force Run",         $options->forceRun     ? "true" : "false") .
+		"\n" .
+		"Report Parameters: \n" .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Date From", $dateFrom) .
+		sprintf("\t %-{$optsNameWidth}s = %s\n", "Date To", $dateTo) .
+		"\n";
+	outlog($logHeader);
+
+
+	// prune old log files
+	outlog("Cleaning up old log files...\n");
+	$logFiles        = explode("\n", `ls -t $config->logDir/$config->weeklyReportFileName.*`);
+	$todayMinusPrune = $startTime - (60 * 60 * 24 * $config->pruneAfter);
+	$todayMinus1     = $startTime - (60 * 60 * 24 * 1);
+	for ($i = 0; $i < count($logFiles); $i++) {
+		$f = $logFiles[$i];
+		if ($f === "") {
+			break;
+		}
+
+		$stat  = stat($f);
+		$mTime = $stat[9];
+		if ($mTime < $todayMinusPrune) {
+			// log file is older than 7 days; delete
+			outlog("\tPruning {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+			unlink($f);
+		}
+		else if ($config->compressLogs && !preg_match("/.*\.gz$/", $f) && $mTime < $todayMinus1) {
+			// log file is older than 1 day; compress
+			outlog("\tCompressing {$f} - " . date("Y-m-d H:i:s", $mTime) . "\n");
+			$out = `gzip $f`;
+		}
+	}
+	outlog("\n");
+
+	/*********************************************************************/
+	/************************* Initialization ****************************/
+	/*********************************************************************/
+
+    // init summary stats
+	$summary = (object) array(
+	    "numRecords" => 0
+	);
+
+	// instantiate the needed data access objects
+	$assetTable             = new AssetTable();
+	$cabinetTable           = new CabinetTable();
+	$locationTable          = new LocationTable();
+	$actionTable           =  new ActionTable();
+
+	$html = getCss();
+    $html .= "<h2>ACDC Weekly Activity Report</h2>\n";
+    $html .= "<b>From:</b> " . $dateFrom . "<br>\n";
+    $html .= "<b>To:</b> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" . $dateTo . "<br>\n";
+
+
+	/*********************************************************************/
+	/**************************** Main ***********************************/
+	/*********************************************************************/
+
+    // get the summary
+    outlog("Getting the weekly summary...\n");
+
+    $actionCounts = $actionTable->getActionCountsByDate($dateFrom, $dateTo);
+    $html .= "<h3>Summary</h3>\n";
+    $html .= "<table><tr><th>Action</th><th>Number of Assets</th></tr>\n";
+    for ($i=0; $i<count($actionCounts); $i++) {
+        $html .= "<tr><td>{$actionCounts[$i]->action}</td><td align='right'>{$actionCounts[$i]->actionCount}</td></tr>\n";
+    }
+    $html .= "</table>\n";
+    $html .= "<br>\n";
+
+
+    // Installs
+    outlog("Getting Installs...\n");
+    $html .= "<h3>Installs</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getByDateAndAction($dateFrom, $dateTo, ActionTable::INSTALLED);
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Repurposed
+    outlog("Getting Repurposed...\n");
+    $html .= "<h3>Repurposed</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Action</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getActionLikeByDate($dateFrom, $dateTo, ActionTable::REPURPOSED);
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $r->getAction() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // In Transit
+    outlog("Getting In Transit...\n");
+    $html .= "<h3>In Transit</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Action</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getActionLikeByDate($dateFrom, $dateTo, ActionTable::IN_TRANSIT);
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $r->getAction() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Relocations
+    outlog("Getting Relocations...\n");
+    $html .= "<h3>Relocations</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Action</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getActionLikeByDate($dateFrom, $dateTo, 'Relocated');
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $r->getAction() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Decomms
+    outlog("Getting Decomms...\n");
+    $html .= "<h3>Decommissions</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Action</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getActionLikeByDate($dateFrom, $dateTo, 'Decommed');
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $r->getAction() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Awaiting Disposal
+    outlog("Getting Awaiting Disposal...\n");
+    $html .= "<h3>Awaiting Disposal</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getByDateAndAction($dateFrom, $dateTo, ActionTable::AWAITING_DISPOSAL);
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Disposed
+    outlog("Getting Disposed...\n");
+    $html .= "<h3>Disposed</h3>\n";
+    $html .= "<table><tr><th>Date</th><th>Name</th><th>Label</th><th>Manufacturer</th><th>Model</th><th>Rack</th><th>Location</th></tr>";
+    $records = $actionTable->getByDateAndAction($dateFrom, $dateTo, ActionTable::DISPOSED);
+    foreach ($records as $r) {
+        $a = $assetTable->getById($r->getAssetId());
+        $html .= "<tr><td>" . $r->getTimeStamp() . "</td><td>" . $a->getName() . "</td><td>" . $a->getLabel() . "</td><td>" . $a->getManufacturer() .
+                 "</td><td>" . $a->getModel() . "</td><td>" . $a->getCabinet() . "</td><td>" . $a->getLocation() . "\n";
+    }
+    $html .= "</table>";
+    outlog("\t" . count($records) . " records found\n");
+
+    // Send the mail
+    outlog("Sending email...\n");
+	$emailTo   = $config->reportMails;
+	$emailSubj = "ACDC: Weekly Activity Report";
+
+	$headers = implode("\r\n", array(
+		"MIME-Version: 1.0",
+		"Content-Type: text/html; charset=us-ascii",
+		"From: messages-noreply@bounce.neustar.biz",
+		"X-Priority: 1",
+		"X-MSMail-Priority: High",
+		"X-Mailer: PHP/" . phpversion()
+	));
+	mail($emailTo, $emailSubj, $html, $headers);
+
+	// write the summary to the end of the log file and close it
+	outlog(generateSummary());
+	fclose($logFilePtr);
+}
+
+catch (Exception $e) {
+	global $options, $logString, $config, $title;
+
+	$emailTo   = $config->adminEmail;
+	$emailFrom = $config->adminEmail;
+	$emailSubj = "ACDC: {$title} Error Report";
+
+	$headers = implode("\r\n", array(
+		"MIME-Version: 1.0",
+		"Content-Type: text/html; charset=us-ascii",
+		"From: {$emailFrom}",
+		"Reply-To: {$emailFrom}",
+		"X-Mailer: PHP/" . phpversion()
+	));
+
+	$traceBack = "returnCode: 1\n" .
+		"errorCode:  {$e->getCode()}\n" .
+		"errorText:  {$e->getMessage()}\n" .
+		"errorFile:  {$e->getFile()}\n" .
+		"errorLine:  {$e->getLine()}\n" .
+		"errorStack: {$e->getTraceAsString()}\n";
+
+	outlog("{$traceBack}\n");
+
+	if (isset($summary)) {
+		outlog(generateSummary());
+	}
+
+	if (!$options->stdOut) {
+		$emailBody = "<pre style='font-size:6pt;'>\n" .
+			"{$logString}\n" .
+			"</pre>\n";
+		mail($emailTo, $emailSubj, $emailBody, $headers);
+	}
+	exit;
+}
+
+function getCss()
+{
+    return '
+        <style type="text/css">
+        body {
+          font-family: arial;
+          font-size: 9pt;
+        }
+        h2 {
+          font-weight: bold;
+          font-size: 9pt;
+        }
+        h3 {
+          font-weight: bold;
+          font-size: 9pt;
+        }
+        h4 {
+          font-weight: bold;
+          font-size: 9pt;
+          margin: 5px 10px;
+        }
+        p {
+          margin-left: 5px;
+          width: 550px;
+        }
+        .indent {
+          margin-left: 40px;
+        }
+        table {
+            width: 98%;
+            font-size: 90%;
+            margin: 5pt 0pt 10pt 0pt;
+            border: 1px solid #C6D5E1;
+        }
+        th {
+            color: #CFDCE7;
+            background: #4B708D;
+        }
+        tr.odd {
+            background-color: #ECF2F6;
+        }
+        tr.even {
+            background-color: #fefefe;
+        }
+        td {
+            padding: 1pt;
+            border-right: 1px solid #C6D5E1;
+            border-bottom: 1px solid #C6D5E1;
+            vertical-align: bottom;
+        }
+        </style>
+        ';
+}
+
+function parseOptions()
+{
+	// command line opts
+	$opts = getopt('hsr');
+
+	// usage if -h
+	if ($opts && array_key_exists('h', $opts)) {
+		usage();
+	}
+
+	// define options
+	$options = (object) array(
+		"stdOut"       => array_key_exists('s', $opts) ? true : false,
+		"forceRun"     => array_key_exists('r', $opts) ? true : false
+	);
+
+	return $options;
+}
+
+function usage()
+{
+	print "Usage: weekly_activity_report [-hsr]\n";
+	print "\n";
+	print "       -h           this help\n";
+	print "       -s           outlog to STDOUT in real time\n";
+	print "       -r           force run even if runCronJobs is false\n";
+	exit;
+}
+
+function generateSummary()
+{
+	global $startTime, $summary, $summaryNameWidth;
+
+	// calc elapsed time
+	$endTime       = time();
+	$elapsedSecs   = $endTime - $startTime;
+	$elapsedFormat = sprintf("%02d:%02d", floor($elapsedSecs / 60), $elapsedSecs % 60);
+
+	return sprintf("\n\nSummary\n%'-60s\n", "") .
+
+	sumOutput("Number of Records", $summary->numRecords) .
+    "\n" .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Start Time", date("Y-m-d H:i:s", $startTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "End Time", date("Y-m-d H:i:s", $endTime)) .
+	sprintf("%-{$summaryNameWidth}s: %s\n", "Elapsed Time", $elapsedFormat) .
+	"Synchronization Complete\n";
+}
+
+function sumOutput($title, $count, $total = null)
+{
+	global $summaryNameWidth;
+
+	if ($total) {
+		return sprintf("%-{$summaryNameWidth}s: %5d (%4.1f%%)\n", $title, $count, round($count / $total * 100, 1));
+	}
+	else {
+		return sprintf("%-{$summaryNameWidth}s: %5d\n", $title, $count);
+	}
+}
+
+function outlog($logMsg)
+{
+	global $options, $logFilePtr, $logString;
+
+	if ($options->stdOut) {
+		print $logMsg;
+	}
+	fwrite($logFilePtr, $logMsg);
+	$logString .= $logMsg;
+}
+
+/** @var $e Exception */
+function printException($e)
+{
+	outlog("\n");
+	outlog(sprintf("%-12s => %s\n", "returnCode", 1));
+	outlog(sprintf("%-12s => %s\n", "errorCode", $e->getCode()));
+	outlog(sprintf("%-12s => %s\n", "errorText", $e->getMessage()));
+	outlog(sprintf("%-12s => %s\n", "errorFile", $e->getFile()));
+	outlog(sprintf("%-12s => %s\n", "errorLine", $e->getLine()));
+	outlog(sprintf("%-12s => \n%s\n", "errorStack", $e->getTraceAsString()));
+	exit;
+}
+
+?>
